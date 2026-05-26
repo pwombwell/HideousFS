@@ -393,7 +393,12 @@ Then replace `Hello` with the real backing directory enumeration.
 
 It should be compiled on macOS using `ncc-riscos`. Other tools are `cmunge`,
 which is a replacement for Acorn's `cmhg` and processes files with that
-extension. `drlink` should be used to link the objects, with `stubs.a`.
+extension. `drlink` should be used to link the objects, with `stubs.a`. It should
+all consistently compile and link with 32-bit APCS, and perhaps generate a 26-bit
+module, too. It should be future-proof to allow compilation for 64-bit RISC OS
+using its toolchain (gcc), but that can be a future step as I don't have the
+toolchain installed (and it may even require hideous mode for all I know). An
+example of compiling for 26-bit can be seen in `../GitHub/aof-toolchain/norcroft`.
 
 See DOSFS, up one directory, as an example, though that compiles under RISC OS.
 See PDModules, also up one directory, as an example of modules that compile
