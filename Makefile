@@ -8,24 +8,24 @@ AS = $(TOOLCHAIN_BIN)/asasm
 CMUNGE = $(TOOLCHAIN_BIN)/cmunge
 DRLINK = $(TOOLCHAIN_BIN)/drlink
 
-BUILD_DIR ?= build/macos
+BUILD_DIR ?= build/
 CMHG_DIR := $(BUILD_DIR)/generated
 OBJ_DIR := $(BUILD_DIR)/obj
 MODULE_DIR := $(BUILD_DIR)/modules
 
-CMHG_SPEC := cmhg/HideousFS
+CMHG_SPEC := src/HideousFS.cmhg
 CMHG_HDR := $(CMHG_DIR)/cmhg.h
 CMHG_ASM := $(CMHG_DIR)/cmhg.s
 CMHG_OBJ := $(OBJ_DIR)/cmhg.o
 CMHG_DEP := $(CMHG_DIR)/cmunge.d
 
-SRCS := c/HideousFS.c
-OBJS := $(patsubst c/%.c,$(OBJ_DIR)/%.o,$(SRCS))
+SRCS := src/HideousFS.c
+OBJS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 DEPS := $(OBJS:.o=.d) $(CMHG_OBJ:.o=.d) $(CMHG_DEP)
 
 MODULE := $(MODULE_DIR)/HideousFS
 
-INCLUDES := -I$(CMHG_DIR) -I/Users/piers/Develop/GitHub/aof-toolchain/norcroft/external/clib/include
+INCLUDES := -I$(CMHG_DIR)
 CFLAGS ?= -zM $(INCLUDES)
 ASFLAGS ?= -aof
 CMUNGEFLAGS ?= -32bit -tnorcroft
@@ -53,7 +53,7 @@ $(CMHG_OBJ): $(CMHG_ASM)
 	@mkdir -p "$(@D)"
 	$(AS) $(ASFLAGS) -Depend="$(@:.o=.d)" -i. -i$(CMHG_DIR) -o "$@" "$<"
 
-$(OBJ_DIR)/%.o: c/%.c $(CMHG_HDR)
+$(OBJ_DIR)/%.o: src/%.c $(CMHG_HDR)
 	@mkdir -p "$(@D)"
 	$(CC) $(CFLAGS) -M "$<" | sed "s|^[^:]*:|$@:|" > "$(@:.o=.d)"
 	$(CC) $(CFLAGS) -c "$<" -o "$@"
