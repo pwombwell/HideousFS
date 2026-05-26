@@ -14,6 +14,7 @@ enum {
     OS_Args = 0x09,
     OS_GBPB = 0x0c,
     OS_Find = 0x0d,
+    OS_BPut = 0x0b,
     OS_FSControl = 0x29,
 
     OSFind_Close = 0,
@@ -919,6 +920,16 @@ _kernel_oserror *hideousfs_fsentry_putbytes_handler(_kernel_swi_regs *regs, void
 
     if (file == NULL || !file->in_use || file->is_directory || !file->writable) {
         return (_kernel_oserror *)&err_not_found;
+    }
+
+    if (regs->r[2] == -1) {
+        os_regs.r[0] = regs->r[0] & 0xff;
+        os_regs.r[1] = (int)file->os_handle;
+        error = _kernel_swi(OS_BPut, &os_regs, &os_regs);
+        if (error == NULL) {
+            file->extent++;
+        }
+        return error;
     }
 
     os_regs.r[0] = OSGBPB_WriteAt;
