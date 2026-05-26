@@ -81,6 +81,8 @@ enum {
 
     MaxPath = 768,
     TempBufferSize = 1024,
+    MaxReverseExtensions = 16,
+    MaxExtensionLen = 16,
     MaxImages = 8,
     MaxOpenFiles = 8
 };
@@ -126,6 +128,9 @@ typedef struct HideousFS_Image {
     int in_use;
     word fileswitch_handle;
     word buffer_size;
+    int beautiful_mode;
+    int reverse_extension_count;
+    char reverse_extensions[MaxReverseExtensions][MaxExtensionLen];
     char image_path[MaxPath];
     char backing_dir[MaxPath];
     char image_leaf[MaxPath];
@@ -226,19 +231,20 @@ static word word_align(word value)
     return (value + 3u) & ~3u;
 }
 
-static int reverse_extension_count(void)
+static int default_reverse_extension_count(void)
 {
     return (int)(sizeof(default_reverse_extensions) /
                  sizeof(default_reverse_extensions[0]));
 }
 
-static int mapped_extension_index(const char *name, size_t len)
+static int mapped_extension_index(const HideousFS_Image *image,
+                                  const char *name, size_t len)
 {
     int i;
 
-    for (i = 0; i < reverse_extension_count(); ++i) {
-        if (strlen(default_reverse_extensions[i]) == len &&
-            strncmp(default_reverse_extensions[i], name, len) == 0) {
+    for (i = 0; i < image->reverse_extension_count; ++i) {
+        if (strlen(image->reverse_extensions[i]) == len &&
+            strncmp(image->reverse_extensions[i], name, len) == 0) {
             return i;
         }
     }
@@ -246,9 +252,9 @@ static int mapped_extension_index(const char *name, size_t len)
     return -1;
 }
 
-static int is_mapped_extension(const char *name)
+static int is_mapped_extension(const HideousFS_Image *image, const char *name)
 {
-    return mapped_extension_index(name, strlen(name)) >= 0;
+    return mapped_extension_index(image, name, strlen(name)) >= 0;
 }
 
 static int is_root_name(const char *name)
@@ -352,7 +358,7 @@ static int build_backing_object_path(const HideousFS_Image *image,
 
     prefix_end = extension == relative ? extension : extension - 1;
     extension_len = (size_t)((leaf - 1) - extension);
-    if (mapped_extension_index(extension, extension_len) < 0) {
+    if (mapped_extension_index(image, extension, extension_len) < 0) {
         return append_relative_to_backing(image, relative, dest, dest_size);
     }
 
@@ -402,7 +408,7 @@ static int resolve_directory_path(const HideousFS_Image *image,
     component = last_component(relative);
     extension_len = strlen(component);
 
-    if (mapped_extension_index(component, extension_len) >= 0) {
+    if (mapped_extension_index(image, component, extension_len) >= 0) {
         if (extension_len >= synthetic_extension_size) {
             return 0;
         }
@@ -454,6 +460,8 @@ static void release_image(HideousFS_Image *image)
 {
     image->in_use = 0;
     image->fileswitch_handle = 0;
+    image->beautiful_mode = 0;
+    image->reverse_extension_count = 0;
 }
 
 static HideousFS_File *claim_file_handle(void)
@@ -501,7 +509,8 @@ static _kernel_oserror *read_file_info(const char *path, FS_cat_entry *entry)
     return NULL;
 }
 
-static int host_leaf_extension_index(const char *leaf, const char **base_end)
+static int host_leaf_extension_index(const HideousFS_Image *image,
+                                     const char *leaf, const char **base_end)
 {
     const char *slash = strrchr(leaf, '/');
 
@@ -513,10 +522,11 @@ static int host_leaf_extension_index(const char *leaf, const char **base_end)
         *base_end = slash;
     }
 
-    return mapped_extension_index(slash + 1, strlen(slash + 1));
+    return mapped_extension_index(image, slash + 1, strlen(slash + 1));
 }
 
-static _kernel_oserror *directory_contains_extension(const char *backing_dir,
+static _kernel_oserror *directory_contains_extension(const HideousFS_Image *image,
+                                                     const char *backing_dir,
                                                      const char *extension,
                                                      int *found)
 {
@@ -547,9 +557,9 @@ static _kernel_oserror *directory_contains_extension(const char *backing_dir,
             break;
         }
 
-        extension_index = host_leaf_extension_index(temp_buffer, NULL);
+        extension_index = host_leaf_extension_index(image, temp_buffer, NULL);
         if (extension_index >= 0 &&
-            strcmp(default_reverse_extensions[extension_index], extension) == 0) {
+            strcmp(image->reverse_extensions[extension_index], extension) == 0) {
             *found = 1;
             return NULL;
         }
@@ -565,6 +575,206 @@ static void fill_synthetic_dir_info(FS_cat_entry *entry)
     entry->execaddr = 0;
     entry->filelen = 0;
     entry->fileattr = file_attr_owner_read | file_attr_public_read;
+}
+
+static int is_space_char(char ch)
+{
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+}
+
+static char *next_word(char **cursor)
+{
+    char *start;
+
+    while (**cursor != '\0' && is_space_char(**cursor)) {
+        ++*cursor;
+    }
+
+    if (**cursor == '\0') {
+        return NULL;
+    }
+
+    start = *cursor;
+    while (**cursor != '\0' && !is_space_char(**cursor)) {
+        ++*cursor;
+    }
+
+    if (**cursor != '\0') {
+        **cursor = '\0';
+        ++*cursor;
+    }
+
+    return start;
+}
+
+static int strings_equal(const char *left, const char *right)
+{
+    return strcmp(left, right) == 0;
+}
+
+static int add_reverse_extension(HideousFS_Image *image, const char *extension)
+{
+    size_t len = strlen(extension);
+
+    if (len == 0 || len >= MaxExtensionLen) {
+        return 0;
+    }
+
+    if (mapped_extension_index(image, extension, len) >= 0) {
+        return 1;
+    }
+
+    if (image->reverse_extension_count >= MaxReverseExtensions) {
+        return 0;
+    }
+
+    memcpy(image->reverse_extensions[image->reverse_extension_count],
+           extension, len + 1);
+    image->reverse_extension_count++;
+    return 1;
+}
+
+static void initialise_default_config(HideousFS_Image *image)
+{
+    int i;
+
+    image->beautiful_mode = 0;
+    image->reverse_extension_count = 0;
+    for (i = 0; i < default_reverse_extension_count(); ++i) {
+        (void)add_reverse_extension(image, default_reverse_extensions[i]);
+    }
+}
+
+static int parse_config_line(HideousFS_Image *image, char *line,
+                             int *saw_directive)
+{
+    char *comment = strchr(line, '#');
+    char *cursor;
+    char *keyword;
+
+    if (comment != NULL) {
+        *comment = '\0';
+    }
+
+    cursor = line;
+    keyword = next_word(&cursor);
+    if (keyword == NULL) {
+        return 1;
+    }
+
+    *saw_directive = 1;
+
+    if (strings_equal(keyword, "mode")) {
+        char *mode = next_word(&cursor);
+
+        if (mode == NULL || next_word(&cursor) != NULL) {
+            return 0;
+        }
+        if (strings_equal(mode, "hideous")) {
+            image->beautiful_mode = 0;
+            return 1;
+        }
+        if (strings_equal(mode, "beautiful")) {
+            image->beautiful_mode = 1;
+            return 1;
+        }
+        return 0;
+    }
+
+    if (strings_equal(keyword, "reverse")) {
+        char *extension;
+        int saw_extension = 0;
+
+        while ((extension = next_word(&cursor)) != NULL) {
+            if (!add_reverse_extension(image, extension)) {
+                return 0;
+            }
+            saw_extension = 1;
+        }
+
+        return saw_extension;
+    }
+
+    return 0;
+}
+
+static int parse_config(HideousFS_Image *image, char *buffer)
+{
+    char *line = buffer;
+    int saw_directive = 0;
+
+    image->beautiful_mode = 0;
+    image->reverse_extension_count = 0;
+
+    while (*line != '\0') {
+        char *next = line;
+
+        while (*next != '\0' && *next != '\n' && *next != '\r') {
+            ++next;
+        }
+        if (*next != '\0') {
+            char separator = *next;
+
+            *next = '\0';
+            ++next;
+            if (separator == '\r' && *next == '\n') {
+                *next = '\0';
+                ++next;
+            }
+        }
+
+        if (!parse_config_line(image, line, &saw_directive)) {
+            return 0;
+        }
+        line = next;
+    }
+
+    return saw_directive && image->reverse_extension_count != 0;
+}
+
+static void read_image_config(HideousFS_Image *image)
+{
+    _kernel_swi_regs regs;
+    _kernel_oserror *error;
+    word extent;
+    word bytes_to_read;
+
+    initialise_default_config(image);
+
+    regs.r[0] = OSArgs_ReadExt;
+    regs.r[1] = (int)image->fileswitch_handle;
+    error = _kernel_swi(OS_Args, &regs, &regs);
+    if (error != NULL) {
+        return;
+    }
+
+    extent = (word)regs.r[2];
+    if (extent == 0) {
+        return;
+    }
+
+    bytes_to_read = extent;
+    if (bytes_to_read >= TempBufferSize) {
+        bytes_to_read = TempBufferSize - 1;
+    }
+
+    regs.r[0] = OSGBPB_ReadAt;
+    regs.r[1] = (int)image->fileswitch_handle;
+    regs.r[2] = (int)temp_buffer;
+    regs.r[3] = (int)bytes_to_read;
+    regs.r[4] = 0;
+    error = _kernel_swi(OS_GBPB, &regs, &regs);
+    if (error != NULL) {
+        initialise_default_config(image);
+        return;
+    }
+
+    bytes_to_read -= (word)regs.r[3];
+    temp_buffer[bytes_to_read] = '\0';
+
+    if (!parse_config(image, temp_buffer)) {
+        initialise_default_config(image);
+    }
 }
 
 static _kernel_oserror *write_file_info(const char *path, word loadaddr,
@@ -586,14 +796,15 @@ static int build_writable_object_path(const HideousFS_Image *image,
                                       char *dest, size_t dest_size)
 {
     if (is_active_image_path(image, name) ||
-        is_mapped_extension(last_component(skip_root_prefix(name)))) {
+        is_mapped_extension(image, last_component(skip_root_prefix(name)))) {
         return 0;
     }
 
     return build_backing_object_path(image, name, dest, dest_size);
 }
 
-static int path_has_mapped_component(const char *name)
+static int path_has_mapped_component(const HideousFS_Image *image,
+                                     const char *name)
 {
     const char *component = skip_root_prefix(name);
 
@@ -601,7 +812,7 @@ static int path_has_mapped_component(const char *name)
         const char *dot = strchr(component, '.');
         size_t len = dot == NULL ? strlen(component) : (size_t)(dot - component);
 
-        if (mapped_extension_index(component, len) >= 0) {
+        if (mapped_extension_index(image, component, len) >= 0) {
             return 1;
         }
 
@@ -615,7 +826,8 @@ static int build_writable_directory_path(const HideousFS_Image *image,
                                          const char *name,
                                          char *dest, size_t dest_size)
 {
-    if (is_active_image_path(image, name) || path_has_mapped_component(name)) {
+    if (is_active_image_path(image, name) ||
+        path_has_mapped_component(image, name)) {
         return 0;
     }
 
@@ -794,7 +1006,8 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
         return (_kernel_oserror *)&err_path_too_long;
     }
     if (synthetic_extension[0] != '\0') {
-        error = directory_contains_extension(path_buffer, synthetic_extension, &found);
+        error = directory_contains_extension(image, path_buffer,
+                                             synthetic_extension, &found);
         if (error != NULL) {
             return error;
         }
@@ -838,7 +1051,8 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
         return (_kernel_oserror *)&err_path_too_long;
     }
 
-    if (is_mapped_extension(last_component(skip_root_prefix((const char *)regs->r[1])))) {
+    if (is_mapped_extension(image,
+                            last_component(skip_root_prefix((const char *)regs->r[1])))) {
         return (_kernel_oserror *)&err_not_found;
     }
 
@@ -1160,7 +1374,8 @@ _kernel_oserror *hideousfs_fsentry_file_handler(_kernel_swi_regs *regs, void *pr
             return (_kernel_oserror *)&err_path_too_long;
         }
         if (synthetic_extension[0] != '\0') {
-            error = directory_contains_extension(path_buffer, synthetic_extension, &found);
+            error = directory_contains_extension(image, path_buffer,
+                                                 synthetic_extension, &found);
             if (error != NULL) {
                 return error;
             }
@@ -1184,7 +1399,8 @@ _kernel_oserror *hideousfs_fsentry_file_handler(_kernel_swi_regs *regs, void *pr
         if (error != NULL) {
             return error;
         }
-        if (is_mapped_extension(last_component(skip_root_prefix((const char *)regs->r[1])))) {
+        if (is_mapped_extension(image,
+                                last_component(skip_root_prefix((const char *)regs->r[1])))) {
             return (_kernel_oserror *)&err_not_found;
         }
 
@@ -1309,14 +1525,14 @@ static _kernel_oserror *read_dir(_kernel_swi_regs *regs, int with_info)
         }
 
         if (!skip && synthetic_extension[0] == '\0' &&
-            is_mapped_extension(leaf)) {
+            is_mapped_extension(image, leaf)) {
             skip = 1;
         }
 
-        extension_index = host_leaf_extension_index(leaf, &base_end);
+        extension_index = host_leaf_extension_index(image, leaf, &base_end);
         if (!skip && synthetic_extension[0] != '\0') {
             if (extension_index < 0 ||
-                strcmp(default_reverse_extensions[extension_index],
+                strcmp(image->reverse_extensions[extension_index],
                        synthetic_extension) != 0) {
                 skip = 1;
             } else if ((size_t)(base_end - leaf) >= sizeof(projected_name)) {
@@ -1331,7 +1547,7 @@ static _kernel_oserror *read_dir(_kernel_swi_regs *regs, int with_info)
             } else {
                 seen_extensions |= 1u << extension_index;
                 if (!copy_string(projected_name, sizeof(projected_name),
-                                 default_reverse_extensions[extension_index])) {
+                                 image->reverse_extensions[extension_index])) {
                     return (_kernel_oserror *)&err_path_too_long;
                 }
                 synthetic_directory = 1;
@@ -1447,6 +1663,7 @@ _kernel_oserror *hideousfs_fsentry_func_handler(_kernel_swi_regs *regs, void *pr
             release_image(image);
             return error;
         }
+        read_image_config(image);
         regs->r[1] = (int)image;
         return NULL;
 
