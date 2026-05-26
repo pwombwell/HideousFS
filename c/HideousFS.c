@@ -18,22 +18,42 @@ enum {
 
     OSFind_Close = 0,
     OSFind_ReadFileNoPath = 0x4f,
+    OSFind_WriteFileNoPath = 0x87,
+    OSFind_UpdateFileNoPath = 0xcf,
 
+    OSGBPB_WriteAt = 1,
     OSGBPB_ReadAt = 3,
     OSGBPB_DirEntries = 9,
     OSGBPB_DirEntriesInfo = 10,
 
+    OSArgs_SetExt = 3,
+    OSArgs_SetAllocation = 6,
     OSArgs_ReadExt = 2,
     OSArgs_ReadPath = 7,
 
     FSControl_RegisterImageFS = 0x23,
     FSControl_DeregisterImageFS = 0x24,
 
+    fsfile_Save = 0,
+    fsfile_WriteInfo = 1,
+    fsfile_WriteLoad = 2,
+    fsfile_WriteExec = 3,
+    fsfile_WriteAttr = 4,
     fsfile_ReadInfo = 5,
+    fsfile_Delete = 6,
+    fsfile_Create = 7,
+    fsfile_CreateDir = 8,
+    fsfile_ReadBlockSize = 10,
 
+    fsopen_ReadOnly = 0,
+    fsopen_CreateUpdate = 1,
+    fsopen_Update = 2,
+
+    fsargs_SetEXT = 3,
     fsargs_ReadEXT = 2,
     fsargs_ReadSize = 4,
     fsargs_Flush = 6,
+    fsargs_EnsureSize = 7,
     fsargs_ReadLoadExec = 9,
 
     fsfunc_ReadDirEntries = 14,
@@ -50,13 +70,17 @@ enum {
     fsopen_IsDirectory = 1u << 29,
 
     file_attr_owner_read = 1u << 0,
+    file_attr_owner_write = 1u << 1,
     file_attr_public_read = 1u << 4,
+    file_attr_public_write = 1u << 5,
 
     MaxPath = 768,
     TempBufferSize = 1024,
     MaxImages = 8,
     MaxOpenFiles = 8
 };
+
+#define fsopen_WritePermission ((word)1u << 31)
 
 typedef struct FS_cat_entry {
     word type;
@@ -105,11 +129,13 @@ typedef struct HideousFS_Image {
 typedef struct HideousFS_File {
     int in_use;
     int is_directory;
+    int writable;
     word os_handle;
     word loadaddr;
     word execaddr;
     word extent;
     word attr;
+    char backing_path[MaxPath];
 } HideousFS_File;
 
 extern char __module_header[];
@@ -442,7 +468,9 @@ static void release_file_handle(HideousFS_File *file)
 {
     file->in_use = 0;
     file->is_directory = 0;
+    file->writable = 0;
     file->os_handle = 0;
+    file->backing_path[0] = '\0';
 }
 
 static _kernel_oserror *read_file_info(const char *path, FS_cat_entry *entry)
@@ -530,6 +558,64 @@ static void fill_synthetic_dir_info(FS_cat_entry *entry)
     entry->execaddr = 0;
     entry->filelen = 0;
     entry->fileattr = file_attr_owner_read | file_attr_public_read;
+}
+
+static _kernel_oserror *write_file_info(const char *path, word loadaddr,
+                                        word execaddr, word attr)
+{
+    _kernel_swi_regs regs;
+
+    regs.r[0] = fsfile_WriteInfo;
+    regs.r[1] = (int)path;
+    regs.r[2] = (int)loadaddr;
+    regs.r[3] = (int)execaddr;
+    regs.r[5] = (int)attr;
+
+    return _kernel_swi(OS_File, &regs, &regs);
+}
+
+static int build_writable_object_path(const HideousFS_Image *image,
+                                      const char *name,
+                                      char *dest, size_t dest_size)
+{
+    if (is_active_image_path(image, name) ||
+        is_mapped_extension(last_component(skip_root_prefix(name)))) {
+        return 0;
+    }
+
+    return build_backing_object_path(image, name, dest, dest_size);
+}
+
+static _kernel_oserror *set_file_extent(HideousFS_File *file, word extent)
+{
+    _kernel_swi_regs regs;
+    _kernel_oserror *error;
+
+    regs.r[0] = OSArgs_SetExt;
+    regs.r[1] = (int)file->os_handle;
+    regs.r[2] = (int)extent;
+
+    error = _kernel_swi(OS_Args, &regs, &regs);
+    if (error == NULL) {
+        file->extent = extent;
+    }
+    return error;
+}
+
+static _kernel_oserror *ensure_file_size(HideousFS_File *file, word size)
+{
+    _kernel_swi_regs regs;
+    _kernel_oserror *error;
+
+    regs.r[0] = OSArgs_SetAllocation;
+    regs.r[1] = (int)file->os_handle;
+    regs.r[2] = (int)size;
+
+    error = _kernel_swi(OS_Args, &regs, &regs);
+    if (error == NULL && size > file->extent) {
+        file->extent = size;
+    }
+    return error;
 }
 
 static _kernel_oserror *read_image_path(HideousFS_Image *image)
@@ -647,12 +733,17 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
     _kernel_oserror *error;
     char synthetic_extension[16];
     int found;
+    int open_mode = regs->r[0];
+    int writable;
 
     (void)private_word;
 
     if (image == NULL || !image->in_use || regs->r[1] == 0 ||
         is_active_image_path(image, (const char *)regs->r[1])) {
         return (_kernel_oserror *)&err_not_found;
+    }
+    if (open_mode < fsopen_ReadOnly || open_mode > fsopen_Update) {
+        return operation_not_implemented("Open", open_mode);
     }
 
     if (!resolve_directory_path(image, (const char *)regs->r[1],
@@ -667,17 +758,23 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
             return error;
         }
         if (found) {
+            if (open_mode != fsopen_ReadOnly) {
+                return (_kernel_oserror *)&err_not_found;
+            }
+
             file = claim_file_handle();
             if (file == NULL) {
                 return (_kernel_oserror *)&err_no_file_handles;
             }
 
             file->is_directory = 1;
+            file->writable = 0;
             file->os_handle = 0;
             file->loadaddr = 0;
             file->execaddr = 0;
             file->extent = 0;
             file->attr = file_attr_owner_read | file_attr_public_read;
+            file->backing_path[0] = '\0';
 
             open_block.information = fsopen_ReadPermission | fsopen_IsDirectory;
             open_block.inhand = file;
@@ -699,11 +796,36 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
         return (_kernel_oserror *)&err_path_too_long;
     }
 
-    error = read_file_info(path_buffer, &cat_entry);
-    if (error != NULL) {
-        return error;
-    }
     if (is_mapped_extension(last_component(skip_root_prefix((const char *)regs->r[1])))) {
+        return (_kernel_oserror *)&err_not_found;
+    }
+
+    writable = open_mode != fsopen_ReadOnly;
+    cat_entry.type = 0;
+    cat_entry.loadaddr = 0;
+    cat_entry.execaddr = 0;
+    cat_entry.filelen = 0;
+    cat_entry.fileattr = file_attr_owner_read | file_attr_owner_write |
+                         file_attr_public_read | file_attr_public_write;
+
+    if (open_mode != fsopen_CreateUpdate) {
+        error = read_file_info(path_buffer, &cat_entry);
+        if (error != NULL) {
+            return error;
+        }
+    } else {
+        error = read_file_info(path_buffer, &cat_entry);
+        if (error != NULL) {
+            cat_entry.type = object_file;
+            cat_entry.loadaddr = 0;
+            cat_entry.execaddr = 0;
+            cat_entry.filelen = 0;
+            cat_entry.fileattr = file_attr_owner_read | file_attr_owner_write |
+                                 file_attr_public_read | file_attr_public_write;
+        }
+    }
+
+    if (cat_entry.type == object_directory && writable) {
         return (_kernel_oserror *)&err_not_found;
     }
     if (cat_entry.type != object_file && cat_entry.type != object_directory) {
@@ -716,7 +838,13 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
     }
 
     if (cat_entry.type == object_file) {
-        os_regs.r[0] = OSFind_ReadFileNoPath;
+        if (open_mode == fsopen_CreateUpdate) {
+            os_regs.r[0] = OSFind_WriteFileNoPath;
+        } else if (open_mode == fsopen_Update) {
+            os_regs.r[0] = OSFind_UpdateFileNoPath;
+        } else {
+            os_regs.r[0] = OSFind_ReadFileNoPath;
+        }
         os_regs.r[1] = (int)path_buffer;
         error = _kernel_swi(OS_Find, &os_regs, &os_regs);
         if (error != NULL) {
@@ -729,12 +857,23 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
     }
 
     file->is_directory = cat_entry.type == object_directory;
+    file->writable = writable && !file->is_directory;
     file->loadaddr = cat_entry.loadaddr;
     file->execaddr = cat_entry.execaddr;
-    file->extent = cat_entry.filelen;
+    file->extent = open_mode == fsopen_CreateUpdate ? 0 : cat_entry.filelen;
     file->attr = cat_entry.fileattr;
+    if (!copy_string(file->backing_path, sizeof(file->backing_path), path_buffer)) {
+        if (!file->is_directory && file->os_handle != 0) {
+            os_regs.r[0] = OSFind_Close;
+            os_regs.r[1] = (int)file->os_handle;
+            (void)_kernel_swi(OS_Find, &os_regs, &os_regs);
+        }
+        release_file_handle(file);
+        return (_kernel_oserror *)&err_path_too_long;
+    }
 
     open_block.information = fsopen_ReadPermission |
+                             (file->writable ? fsopen_WritePermission : 0) |
                              (file->is_directory ? fsopen_IsDirectory : 0);
     open_block.inhand = file;
     open_block.buffsize = 0;
@@ -771,9 +910,31 @@ _kernel_oserror *hideousfs_fsentry_getbytes_handler(_kernel_swi_regs *regs, void
 
 _kernel_oserror *hideousfs_fsentry_putbytes_handler(_kernel_swi_regs *regs, void *private_word)
 {
+    HideousFS_File *file = (HideousFS_File *)regs->r[1];
+    _kernel_swi_regs os_regs;
+    _kernel_oserror *error;
+    word end_offset;
+
     (void)private_word;
 
-    return operation_not_implemented("PutBytes", regs->r[0]);
+    if (file == NULL || !file->in_use || file->is_directory || !file->writable) {
+        return (_kernel_oserror *)&err_not_found;
+    }
+
+    os_regs.r[0] = OSGBPB_WriteAt;
+    os_regs.r[1] = (int)file->os_handle;
+    os_regs.r[2] = regs->r[2];
+    os_regs.r[3] = regs->r[3];
+    os_regs.r[4] = regs->r[4];
+
+    error = _kernel_swi(OS_GBPB, &os_regs, &os_regs);
+    if (error == NULL) {
+        end_offset = (word)regs->r[4] + (word)regs->r[3];
+        if (end_offset > file->extent) {
+            file->extent = end_offset;
+        }
+    }
+    return error;
 }
 
 _kernel_oserror *hideousfs_fsentry_args_handler(_kernel_swi_regs *regs, void *private_word)
@@ -787,6 +948,12 @@ _kernel_oserror *hideousfs_fsentry_args_handler(_kernel_swi_regs *regs, void *pr
     }
 
     switch (regs->r[0]) {
+    case fsargs_SetEXT:
+        if (file->is_directory || !file->writable) {
+            return (_kernel_oserror *)&err_not_found;
+        }
+        return set_file_extent(file, (word)regs->r[2]);
+
     case fsargs_ReadEXT:
     case fsargs_ReadSize:
         regs->r[2] = (int)file->extent;
@@ -799,6 +966,12 @@ _kernel_oserror *hideousfs_fsentry_args_handler(_kernel_swi_regs *regs, void *pr
         regs->r[2] = (int)datestamp.loadaddr;
         regs->r[3] = (int)datestamp.execaddr;
         return NULL;
+
+    case fsargs_EnsureSize:
+        if (file->is_directory || !file->writable) {
+            return (_kernel_oserror *)&err_not_found;
+        }
+        return ensure_file_size(file, (word)regs->r[2]);
 
     default:
         return operation_not_implemented("Args", regs->r[0]);
@@ -823,6 +996,12 @@ _kernel_oserror *hideousfs_fsentry_close_handler(_kernel_swi_regs *regs, void *p
         os_regs.r[0] = OSFind_Close;
         os_regs.r[1] = (int)file->os_handle;
         error = _kernel_swi(OS_Find, &os_regs, &os_regs);
+        if (error == NULL && file->writable) {
+            file->loadaddr = (word)regs->r[2];
+            file->execaddr = (word)regs->r[3];
+            error = write_file_info(file->backing_path, file->loadaddr,
+                                    file->execaddr, file->attr);
+        }
     }
 
     release_file_handle(file);
@@ -832,14 +1011,61 @@ _kernel_oserror *hideousfs_fsentry_close_handler(_kernel_swi_regs *regs, void *p
 _kernel_oserror *hideousfs_fsentry_file_handler(_kernel_swi_regs *regs, void *private_word)
 {
     HideousFS_Image *image = (HideousFS_Image *)regs->r[6];
+    _kernel_swi_regs os_regs;
     _kernel_oserror *error;
     char synthetic_extension[16];
     int found;
 
     (void)private_word;
 
-    if (regs->r[0] == fsfile_ReadInfo && image != NULL && image->in_use &&
-        regs->r[1] != 0) {
+    if (image == NULL || !image->in_use || regs->r[1] == 0) {
+        return operation_not_implemented("FSFile", regs->r[0]);
+    }
+
+    switch (regs->r[0]) {
+    case fsfile_Save:
+    case fsfile_Create:
+        if (!build_writable_object_path(image, (const char *)regs->r[1],
+                                        path_buffer, sizeof(path_buffer))) {
+            return (_kernel_oserror *)&err_not_found;
+        }
+
+        os_regs.r[0] = regs->r[0];
+        os_regs.r[1] = (int)path_buffer;
+        os_regs.r[2] = regs->r[2];
+        os_regs.r[3] = regs->r[3];
+        os_regs.r[4] = regs->r[4];
+        os_regs.r[5] = regs->r[5];
+        return _kernel_swi(OS_File, &os_regs, &os_regs);
+
+    case fsfile_WriteInfo:
+    case fsfile_WriteLoad:
+    case fsfile_WriteExec:
+    case fsfile_WriteAttr:
+    case fsfile_Delete:
+        if (!build_writable_object_path(image, (const char *)regs->r[1],
+                                        path_buffer, sizeof(path_buffer))) {
+            return (_kernel_oserror *)&err_not_found;
+        }
+
+        os_regs.r[0] = regs->r[0];
+        os_regs.r[1] = (int)path_buffer;
+        os_regs.r[2] = regs->r[2];
+        os_regs.r[3] = regs->r[3];
+        os_regs.r[4] = regs->r[4];
+        os_regs.r[5] = regs->r[5];
+        error = _kernel_swi(OS_File, &os_regs, &os_regs);
+        if (error != NULL) {
+            return error;
+        }
+        regs->r[0] = os_regs.r[0];
+        regs->r[2] = os_regs.r[2];
+        regs->r[3] = os_regs.r[3];
+        regs->r[4] = os_regs.r[4];
+        regs->r[5] = os_regs.r[5];
+        return NULL;
+
+    case fsfile_ReadInfo:
         if (is_active_image_path(image, (const char *)regs->r[1])) {
             return (_kernel_oserror *)&err_not_found;
         }
@@ -885,9 +1111,10 @@ _kernel_oserror *hideousfs_fsentry_file_handler(_kernel_swi_regs *regs, void *pr
         regs->r[4] = (int)cat_entry.filelen;
         regs->r[5] = (int)cat_entry.fileattr;
         return NULL;
-    }
 
-    return operation_not_implemented("FSFile", regs->r[0]);
+    default:
+        return operation_not_implemented("FSFile", regs->r[0]);
+    }
 }
 
 static word dir_entry_size(const char *name, int with_info)
