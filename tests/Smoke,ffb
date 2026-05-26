@@ -1,0 +1,74 @@
+10 REM HideousFS smoke tests
+20 REM Plain text BBC BASIC; run under RISC OS with HideousFS loaded.
+30 ON ERROR PROCerror:END
+40 root$="HostFS:$.HideousFSTest"+MID$(STR$(TIME),2)
+50 errors%=0
+60 PRINT "HideousFS smoke test root: ";root$
+70 PROCmkdir(root$)
+80 hideous$=root$+".Hideous"
+90 beautiful$=root$+".Beautiful"
+100 PROCsetup_hideous(hideous$)
+110 PROCsetup_beautiful(beautiful$)
+120 PRINT '"Catalogue: Hideous image view"
+130 OSCLI "Cat "+hideous$+".View"
+140 PRINT '"Catalogue: Beautiful image view"
+150 OSCLI "Cat "+beautiful$+".View"
+160 PROCwrite(hideous$+".View.c.newhide","hideous save"+CHR$13)
+170 PROCassert(FNexists(hideous$+".newhide/c"),"Hideous save created backing newhide/c")
+180 PROCassert(FNexists(beautiful$+".h")=0,"Beautiful h bucket absent before save")
+190 PROCwrite(beautiful$+".View.header/h","beautiful save"+CHR$13)
+200 PROCassert(FNisdir(beautiful$+".h"),"Beautiful save created h backing bucket")
+210 PROCassert(FNexists(beautiful$+".h.header"),"Beautiful save created backing h.header")
+220 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
+230 PRINT "Test tree left at: ";root$
+240 END
+1000 DEF PROCsetup_hideous(d$)
+1010 PROCmkdir(d$)
+1020 PROCwrite_config(d$+".View","hideous")
+1030 PROCwrite(d$+".main/c","int main(void)"+CHR$13)
+1040 PROCwrite(d$+".defs/h","#define VALUE 1"+CHR$13)
+1050 PROCwrite(d$+".Readme","Hideous backing tree"+CHR$13)
+1060 ENDPROC
+1100 DEF PROCsetup_beautiful(d$)
+1110 PROCmkdir(d$)
+1120 PROCwrite_config(d$+".View","beautiful")
+1130 PROCmkdir(d$+".c")
+1140 PROCwrite(d$+".c.main","int main(void)"+CHR$13)
+1150 PROCwrite(d$+".c.util","void util(void)"+CHR$13)
+1160 PROCwrite(d$+".Readme","Beautiful backing tree"+CHR$13)
+1170 ENDPROC
+1200 DEF PROCwrite_config(file$,mode$)
+1210 text$="# HideousFS"+CHR$13+"mode "+mode$+CHR$13+"reverse c h s o a cpp c++"+CHR$13
+1220 PROCwrite(file$,text$)
+1230 SYS "OS_File",18,file$,&001
+1240 ENDPROC
+1300 DEF PROCmkdir(d$)
+1310 LOCAL obj%
+1320 SYS "OS_File",5,d$ TO obj%
+1330 IF obj%=2 THEN ENDPROC
+1340 IF obj%<>0 THEN PRINT "Not a directory: ";d$:errors%=errors%+1:ENDPROC
+1350 SYS "OS_File",8,d$
+1360 ENDPROC
+1400 DEF PROCwrite(file$,text$)
+1410 LOCAL ch%,i%
+1420 ch%=OPENOUT(file$)
+1430 FOR i%=1 TO LEN(text$)
+1440 BPUT#ch%,ASC(MID$(text$,i%,1))
+1450 NEXT
+1460 CLOSE#ch%
+1470 ENDPROC
+1500 DEF PROCassert(ok%,msg$)
+1510 IF ok% THEN PRINT "PASS: ";msg$ ELSE PRINT "FAIL: ";msg$:errors%=errors%+1
+1520 ENDPROC
+1600 DEF FNexists(file$)
+1610 LOCAL obj%
+1620 SYS "OS_File",5,file$ TO obj%
+1630 =obj%<>0
+1700 DEF FNisdir(file$)
+1710 LOCAL obj%
+1720 SYS "OS_File",5,file$ TO obj%
+1730 =obj%=2
+1800 DEF PROCerror
+1810 PRINT '"ERROR: ";REPORT$;" at line ";ERL
+1820 PRINT "Test tree left at: ";root$
+1830 ENDPROC
