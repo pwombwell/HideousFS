@@ -29,6 +29,8 @@ The current assertions check:
   `main/c` to `renamed/c`.
 - Beautiful mode can rename `main/c` to `renamed/c` and move backing
   `c.main` to `c.renamed`.
+- Pass-through renames in both modes move the backing object without applying
+  reverse-extension mapping.
 - Projected and pass-through deletes remove the expected backing objects.
 - Projected files in both modes can have their filetype set to BASIC
   (`&FFB`) through the image view, and the backing objects report the same
@@ -43,6 +45,8 @@ The current assertions check:
   a raw backing object could otherwise appear at the same image path.
 - Single-byte reads after setting `PTR#`, bulk `OS_GBPB` reads, and bulk
   `OS_GBPB` writes through projected paths behave as expected.
+- Several projected read handles can be open at once and still read the
+  expected data.
 - A projected file written through `OS_GBPB` reports the expected extent.
 
 The program leaves the generated test tree in place so it can be inspected

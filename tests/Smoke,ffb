@@ -35,50 +35,58 @@
 290 PROCassert(FNexists(hideous$+".renamed/c")=0,"Hideous delete removed backing renamed/c")
 300 PROCdelete(beautiful$+".View.renamed/c")
 310 PROCassert(FNexists(beautiful$+".c.renamed")=0,"Beautiful delete removed backing c.renamed")
-320 PROCdelete(hideous$+".View.Readme")
-330 PROCassert(FNexists(hideous$+".Readme")=0,"Hideous delete removed pass-through Readme")
-340 PROCdelete(beautiful$+".View.Readme")
-350 PROCassert(FNexists(beautiful$+".Readme")=0,"Beautiful delete removed pass-through Readme")
-360 PROCwrite(hideous$+".View.c.basichide","PRINT "+CHR$34+"Hideous"+CHR$34+CHR$13)
-370 PROCsettype(hideous$+".View.c.basichide",&FFB)
-380 PROCassert(FNfiletype(hideous$+".basichide/c")=&FFB,"Hideous projected filetype is &FFB")
-390 PROCwrite(beautiful$+".View.basicbeaut/h","PRINT "+CHR$34+"Beautiful"+CHR$34+CHR$13)
-400 PROCsettype(beautiful$+".View.basicbeaut/h",&FFB)
-410 PROCassert(FNfiletype(beautiful$+".h.basicbeaut")=&FFB,"Beautiful projected filetype is &FFB")
-420 PROCassert(FNexists(multi$+".CView.c.onlyc"),"CView maps c-only backing file")
-430 PROCassert(FNexists(multi$+".CView.h.onlyh")=0,"CView does not map h-only backing file")
-440 PROCassert(FNexists(multi$+".HView.h.onlyh"),"HView maps h-only backing file")
-450 PROCassert(FNexists(multi$+".HView.c.onlyc")=0,"HView does not map c-only backing file")
-460 PROCassert(FNexists(hideous$+".View.src.c.submain"),"Hideous subdirectory projected file exists")
-470 PROCwrite(hideous$+".View.src.c.newsub","hideous subdir save"+CHR$13)
-480 PROCassert(FNexists(hideous$+".src.newsub/c"),"Hideous subdirectory save created backing src.newsub/c")
-490 PROCassert(FNexists(beautiful$+".View.src.submain/c"),"Beautiful subdirectory projected file exists")
-500 PROCwrite(beautiful$+".View.src.subnew/h","beautiful subdir save"+CHR$13)
-510 PROCassert(FNexists(beautiful$+".src.h.subnew"),"Beautiful subdirectory save created backing src.h.subnew")
-520 PROCassert(FNfirstbyte(collide$+".Hideous.View.c.collision")=ASC("P"),"Hideous collision reads projected backing file")
-530 PROCassert(FNfirstbyte(collide$+".Beautiful.View.collision/c")=ASC("P"),"Beautiful collision reads projected backing file")
-540 PROCassert(FNbyteat(hideous$+".View.h.defs",1)=ASC("d"),"Hideous BGET after PTR reads expected byte")
-550 PROCassert(FNgbpbfirst(beautiful$+".View.util/c")=ASC("v"),"Beautiful OS_GBPB read returns expected byte")
-560 PROCwrite_gbpb(hideous$+".View.c.bulk","bulk hideous write"+CHR$13)
-570 PROCassert(FNexists(hideous$+".bulk/c"),"Hideous OS_GBPB write created backing bulk/c")
-580 PROCassert(FNfirstbyte(hideous$+".View.c.bulk")=ASC("b"),"Hideous OS_GBPB write content is readable")
-590 PROCassert(FNextent(hideous$+".View.c.bulk")=LEN("bulk hideous write"+CHR$13),"Hideous OS_GBPB write reports expected extent")
-600 PROCwrite_gbpb(beautiful$+".View.bulk/h","bulk beautiful write"+CHR$13)
-610 PROCassert(FNexists(beautiful$+".h.bulk"),"Beautiful OS_GBPB write created backing h.bulk")
-620 PROCassert(FNfirstbyte(beautiful$+".View.bulk/h")=ASC("b"),"Beautiful OS_GBPB write content is readable")
-630 PROCassert(FNexists(split$+".View.c.alpha"),"Split config maps first reverse directive")
-640 PROCassert(FNexists(split$+".View.cpp.beta"),"Split config maps longer reverse extension")
-650 PROCassert(FNexists(split$+".View.h.gamma"),"Split config maps second reverse directive")
-660 PROCassert(FNexists(split$+".View.s.delta")=0,"Split config does not map unlisted reverse extension")
-670 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
-680 PRINT "Test tree left at: ";root$
-690 END
+320 PROCrename(hideous$+".View.Notes",hideous$+".View.Notes2")
+330 PROCassert(FNexists(hideous$+".Notes")=0,"Hideous pass-through rename removed old backing Notes")
+340 PROCassert(FNexists(hideous$+".Notes2"),"Hideous pass-through rename created backing Notes2")
+350 PROCrename(beautiful$+".View.Notes",beautiful$+".View.Notes2")
+360 PROCassert(FNexists(beautiful$+".Notes")=0,"Beautiful pass-through rename removed old backing Notes")
+370 PROCassert(FNexists(beautiful$+".Notes2"),"Beautiful pass-through rename created backing Notes2")
+380 PROCdelete(hideous$+".View.Readme")
+390 PROCassert(FNexists(hideous$+".Readme")=0,"Hideous delete removed pass-through Readme")
+400 PROCdelete(beautiful$+".View.Readme")
+410 PROCassert(FNexists(beautiful$+".Readme")=0,"Beautiful delete removed pass-through Readme")
+420 PROCwrite(hideous$+".View.c.basichide","PRINT "+CHR$34+"Hideous"+CHR$34+CHR$13)
+430 PROCsettype(hideous$+".View.c.basichide",&FFB)
+440 PROCassert(FNfiletype(hideous$+".basichide/c")=&FFB,"Hideous projected filetype is &FFB")
+450 PROCwrite(beautiful$+".View.basicbeaut/h","PRINT "+CHR$34+"Beautiful"+CHR$34+CHR$13)
+460 PROCsettype(beautiful$+".View.basicbeaut/h",&FFB)
+470 PROCassert(FNfiletype(beautiful$+".h.basicbeaut")=&FFB,"Beautiful projected filetype is &FFB")
+480 PROCassert(FNexists(multi$+".CView.c.onlyc"),"CView maps c-only backing file")
+490 PROCassert(FNexists(multi$+".CView.h.onlyh")=0,"CView does not map h-only backing file")
+500 PROCassert(FNexists(multi$+".HView.h.onlyh"),"HView maps h-only backing file")
+510 PROCassert(FNexists(multi$+".HView.c.onlyc")=0,"HView does not map c-only backing file")
+520 PROCassert(FNexists(hideous$+".View.src.c.submain"),"Hideous subdirectory projected file exists")
+530 PROCwrite(hideous$+".View.src.c.newsub","hideous subdir save"+CHR$13)
+540 PROCassert(FNexists(hideous$+".src.newsub/c"),"Hideous subdirectory save created backing src.newsub/c")
+550 PROCassert(FNexists(beautiful$+".View.src.submain/c"),"Beautiful subdirectory projected file exists")
+560 PROCwrite(beautiful$+".View.src.subnew/h","beautiful subdir save"+CHR$13)
+570 PROCassert(FNexists(beautiful$+".src.h.subnew"),"Beautiful subdirectory save created backing src.h.subnew")
+580 PROCassert(FNfirstbyte(collide$+".Hideous.View.c.collision")=ASC("P"),"Hideous collision reads projected backing file")
+590 PROCassert(FNfirstbyte(collide$+".Beautiful.View.collision/c")=ASC("P"),"Beautiful collision reads projected backing file")
+600 PROCassert(FNbyteat(hideous$+".View.h.defs",1)=ASC("d"),"Hideous BGET after PTR reads expected byte")
+610 PROCassert(FNgbpbfirst(beautiful$+".View.util/c")=ASC("v"),"Beautiful OS_GBPB read returns expected byte")
+620 PROCopen_many_read(hideous$+".View.h.defs",12,ASC("#"))
+630 PROCwrite_gbpb(hideous$+".View.c.bulk","bulk hideous write"+CHR$13)
+640 PROCassert(FNexists(hideous$+".bulk/c"),"Hideous OS_GBPB write created backing bulk/c")
+650 PROCassert(FNfirstbyte(hideous$+".View.c.bulk")=ASC("b"),"Hideous OS_GBPB write content is readable")
+660 PROCassert(FNextent(hideous$+".View.c.bulk")=LEN("bulk hideous write"+CHR$13),"Hideous OS_GBPB write reports expected extent")
+670 PROCwrite_gbpb(beautiful$+".View.bulk/h","bulk beautiful write"+CHR$13)
+680 PROCassert(FNexists(beautiful$+".h.bulk"),"Beautiful OS_GBPB write created backing h.bulk")
+690 PROCassert(FNfirstbyte(beautiful$+".View.bulk/h")=ASC("b"),"Beautiful OS_GBPB write content is readable")
+700 PROCassert(FNexists(split$+".View.c.alpha"),"Split config maps first reverse directive")
+710 PROCassert(FNexists(split$+".View.cpp.beta"),"Split config maps longer reverse extension")
+720 PROCassert(FNexists(split$+".View.h.gamma"),"Split config maps second reverse directive")
+730 PROCassert(FNexists(split$+".View.s.delta")=0,"Split config does not map unlisted reverse extension")
+740 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
+750 PRINT "Test tree left at: ";root$
+760 END
 1000 DEF PROCsetup_hideous(d$)
 1010 PROCmkdir(d$)
 1020 PROCwrite_config(d$+".View","hideous")
 1030 PROCwrite(d$+".main/c","int main(void)"+CHR$13)
 1040 PROCwrite(d$+".defs/h","#define VALUE 1"+CHR$13)
 1050 PROCwrite(d$+".Readme","Hideous backing tree"+CHR$13)
+1055 PROCwrite(d$+".Notes","Hideous pass-through notes"+CHR$13)
 1060 PROCmkdir(d$+".src")
 1070 PROCmkdir(d$+".src.submain")
 1080 PROCwrite(d$+".src.submain/c","int submain(void)"+CHR$13)
@@ -90,6 +98,7 @@
 1140 PROCwrite(d$+".c.main","int main(void)"+CHR$13)
 1150 PROCwrite(d$+".c.util","void util(void)"+CHR$13)
 1160 PROCwrite(d$+".Readme","Beautiful backing tree"+CHR$13)
+1165 PROCwrite(d$+".Notes","Beautiful pass-through notes"+CHR$13)
 1170 PROCmkdir(d$+".src")
 1180 PROCmkdir(d$+".src.c")
 1190 PROCwrite(d$+".src.c.submain","int submain(void)"+CHR$13)
@@ -167,63 +176,77 @@
 2080 CLOSE#ch%
 2090 IF unwritten%<>0 THEN PRINT "OS_GBPB write left ";unwritten%;" bytes unwritten: ";file$:errors%=errors%+1
 2100 ENDPROC
-2200 DEF PROCassert(ok%,msg$)
-2210 IF ok% THEN PRINT "PASS: ";msg$ ELSE PRINT "FAIL: ";msg$:errors%=errors%+1
-2220 ENDPROC
-2300 DEF PROCrename(from$,to$)
-2310 OSCLI "Rename "+from$+" "+to$
+2110 DEF PROCopen_many_read(file$,count%,expect%)
+2120 LOCAL i%,byte%
+2130 DIM openhandles%(count%-1)
+2140 FOR i%=0 TO count%-1
+2150 openhandles%(i%)=OPENIN(file$)
+2160 IF openhandles%(i%)=0 THEN PRINT "Unable to open projected file handle ";i%;" for ";file$:errors%=errors%+1
+2170 NEXT
+2180 FOR i%=0 TO count%-1
+2190 IF openhandles%(i%)<>0 THEN byte%=BGET#openhandles%(i%):PROCassert(byte%=expect%,"Projected file handle "+STR$(i%)+" reads expected byte")
+2200 NEXT
+2210 FOR i%=0 TO count%-1
+2220 IF openhandles%(i%)<>0 THEN CLOSE#openhandles%(i%)
+2230 NEXT
+2240 ENDPROC
+2300 DEF PROCassert(ok%,msg$)
+2310 IF ok% THEN PRINT "PASS: ";msg$ ELSE PRINT "FAIL: ";msg$:errors%=errors%+1
 2320 ENDPROC
-2400 DEF PROCdelete(file$)
-2410 SYS "OS_File",6,file$
+2400 DEF PROCrename(from$,to$)
+2410 OSCLI "Rename "+from$+" "+to$
 2420 ENDPROC
-2500 DEF PROCsettype(file$,type%)
-2510 SYS "OS_File",18,file$,type%
+2500 DEF PROCdelete(file$)
+2510 SYS "OS_File",6,file$
 2520 ENDPROC
-2600 DEF FNexists(file$)
-2610 LOCAL obj%
-2620 SYS "OS_File",5,file$ TO obj%
-2630 =obj%<>0
-2700 DEF FNisdir(file$)
+2600 DEF PROCsettype(file$,type%)
+2610 SYS "OS_File",18,file$,type%
+2620 ENDPROC
+2700 DEF FNexists(file$)
 2710 LOCAL obj%
 2720 SYS "OS_File",5,file$ TO obj%
-2730 =obj%=2
-2800 DEF FNfiletype(file$)
-2810 LOCAL obj%,type%
+2730 =obj%<>0
+2800 DEF FNisdir(file$)
+2810 LOCAL obj%
 2820 SYS "OS_File",5,file$ TO obj%
-2830 IF obj%=0 THEN =-1
-2840 SYS "OS_File",23,file$ TO,,,,,,type%
-2850 =type%
-2900 DEF FNfirstbyte(file$)
-2910 LOCAL ch%,byte%
-2920 ch%=OPENIN(file$)
-2930 IF ch%=0 THEN =-1
-2940 byte%=BGET#ch%
-2950 CLOSE#ch%
-2960 =byte%
-3000 DEF FNbyteat(file$,offset%)
+2830 =obj%=2
+2900 DEF FNfiletype(file$)
+2910 LOCAL obj%,type%
+2920 SYS "OS_File",5,file$ TO obj%
+2930 IF obj%=0 THEN =-1
+2940 SYS "OS_File",23,file$ TO,,,,,,type%
+2950 =type%
+3000 DEF FNfirstbyte(file$)
 3010 LOCAL ch%,byte%
 3020 ch%=OPENIN(file$)
 3030 IF ch%=0 THEN =-1
-3040 PTR#ch%=offset%
-3050 byte%=BGET#ch%
-3060 CLOSE#ch%
-3070 =byte%
-3100 DEF FNgbpbfirst(file$)
-3110 LOCAL ch%,buf%,unread%
-3120 DIM buf% 0
-3130 ch%=OPENIN(file$)
-3140 IF ch%=0 THEN =-1
-3150 SYS "OS_GBPB",3,ch%,buf%,1,0 TO ,,,unread%
+3040 byte%=BGET#ch%
+3050 CLOSE#ch%
+3060 =byte%
+3100 DEF FNbyteat(file$,offset%)
+3110 LOCAL ch%,byte%
+3120 ch%=OPENIN(file$)
+3130 IF ch%=0 THEN =-1
+3140 PTR#ch%=offset%
+3150 byte%=BGET#ch%
 3160 CLOSE#ch%
-3170 IF unread%<>0 THEN =-1
-3180 =?buf%
-3200 DEF FNextent(file$)
-3210 LOCAL ch%,size%
-3220 ch%=OPENIN(file$)
-3230 IF ch%=0 THEN =-1
-3240 size%=EXT#ch%
-3250 CLOSE#ch%
-3260 =size%
+3170 =byte%
+3200 DEF FNgbpbfirst(file$)
+3210 LOCAL ch%,buf%,unread%
+3220 DIM buf% 0
+3230 ch%=OPENIN(file$)
+3240 IF ch%=0 THEN =-1
+3250 SYS "OS_GBPB",3,ch%,buf%,1,0 TO ,,,unread%
+3260 CLOSE#ch%
+3270 IF unread%<>0 THEN =-1
+3280 =?buf%
+3300 DEF FNextent(file$)
+3310 LOCAL ch%,size%
+3320 ch%=OPENIN(file$)
+3330 IF ch%=0 THEN =-1
+3340 size%=EXT#ch%
+3350 CLOSE#ch%
+3360 =size%
 9000 DEF PROCerror
 9010 PRINT '"ERROR: ";REPORT$;" at line ";ERL
 9020 PRINT "Test tree left at: ";root$
