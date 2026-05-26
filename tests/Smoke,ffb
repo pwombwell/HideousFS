@@ -55,41 +55,47 @@
 490 PROCassert(FNexists(multi$+".CView.h.onlyh")=0,"CView does not map h-only backing file")
 500 PROCassert(FNexists(multi$+".HView.h.onlyh"),"HView maps h-only backing file")
 510 PROCassert(FNexists(multi$+".HView.c.onlyc")=0,"HView does not map c-only backing file")
-520 PROCassert(FNexists(hideous$+".View.src.c.submain"),"Hideous subdirectory projected file exists")
-530 PROCwrite(hideous$+".View.src.c.newsub","hideous subdir save"+CHR$13)
-540 PROCassert(FNexists(hideous$+".src.newsub/c"),"Hideous subdirectory save created backing src.newsub/c")
-550 PROCassert(FNexists(beautiful$+".View.src.submain/c"),"Beautiful subdirectory projected file exists")
-560 PROCwrite(beautiful$+".View.src.subnew/h","beautiful subdir save"+CHR$13)
-570 PROCassert(FNexists(beautiful$+".src.h.subnew"),"Beautiful subdirectory save created backing src.h.subnew")
-580 PROCassert(FNfirstbyte(collide$+".Hideous.View.c.collision")=ASC("P"),"Hideous collision reads projected backing file")
-590 PROCassert(FNfirstbyte(collide$+".Beautiful.View.collision/c")=ASC("P"),"Beautiful collision reads projected backing file")
-600 PROCassert(FNbyteat(hideous$+".View.h.defs",1)=ASC("d"),"Hideous BGET after PTR reads expected byte")
-610 PROCassert(FNgbpbfirst(beautiful$+".View.util/c")=ASC("v"),"Beautiful OS_GBPB read returns expected byte")
-620 PROCopen_many_read(hideous$+".View.h.defs",12,ASC("#"))
-630 PROCwrite(hideous$+".View.h.defs","updated hideous header"+CHR$13)
-640 PROCassert(FNfirstbyte(hideous$+".defs/h")=ASC("u"),"Hideous overwrite updated backing file")
-650 PROCassert(FNextent(hideous$+".View.h.defs")=LEN("updated hideous header"+CHR$13),"Hideous overwrite reports expected extent")
-660 PROCwrite(beautiful$+".View.util/c","updated beautiful source"+CHR$13)
-670 PROCassert(FNfirstbyte(beautiful$+".c.util")=ASC("u"),"Beautiful overwrite updated backing file")
-680 PROCassert(FNextent(beautiful$+".View.util/c")=LEN("updated beautiful source"+CHR$13),"Beautiful overwrite reports expected extent")
-690 PROCwrite(hideous$+".View.h.defs","h"+CHR$13)
-700 PROCassert(FNextent(hideous$+".View.h.defs")=LEN("h"+CHR$13),"Hideous shorter overwrite truncates extent")
-710 PROCwrite(beautiful$+".View.util/c","c"+CHR$13)
-720 PROCassert(FNextent(beautiful$+".View.util/c")=LEN("c"+CHR$13),"Beautiful shorter overwrite truncates extent")
-730 PROCwrite_gbpb(hideous$+".View.c.bulk","bulk hideous write"+CHR$13)
-740 PROCassert(FNexists(hideous$+".bulk/c"),"Hideous OS_GBPB write created backing bulk/c")
-750 PROCassert(FNfirstbyte(hideous$+".View.c.bulk")=ASC("b"),"Hideous OS_GBPB write content is readable")
-760 PROCassert(FNextent(hideous$+".View.c.bulk")=LEN("bulk hideous write"+CHR$13),"Hideous OS_GBPB write reports expected extent")
-770 PROCwrite_gbpb(beautiful$+".View.bulk/h","bulk beautiful write"+CHR$13)
-780 PROCassert(FNexists(beautiful$+".h.bulk"),"Beautiful OS_GBPB write created backing h.bulk")
-790 PROCassert(FNfirstbyte(beautiful$+".View.bulk/h")=ASC("b"),"Beautiful OS_GBPB write content is readable")
-800 PROCassert(FNexists(split$+".View.c.alpha"),"Split config maps first reverse directive")
-810 PROCassert(FNexists(split$+".View.cpp.beta"),"Split config maps longer reverse extension")
-820 PROCassert(FNexists(split$+".View.h.gamma"),"Split config maps second reverse directive")
-830 PROCassert(FNexists(split$+".View.s.delta")=0,"Split config does not map unlisted reverse extension")
-840 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
-850 PRINT "Test tree left at: ";root$
-860 END
+520 PROCassert(FNexists(hideous$+".View.View")=0,"Hideous image file is hidden from its own view")
+530 PROCassert(FNexists(beautiful$+".View.View")=0,"Beautiful image file is hidden from its own view")
+540 PROCassert(FNexists(multi$+".CView.CView")=0,"CView image file is hidden from CView")
+550 PROCassert(FNexists(multi$+".CView.HView")=0,"HView image file is hidden from CView")
+560 PROCassert(FNexists(multi$+".HView.CView")=0,"CView image file is hidden from HView")
+570 PROCassert(FNexists(multi$+".HView.HView")=0,"HView image file is hidden from HView")
+580 PROCassert(FNexists(hideous$+".View.src.c.submain"),"Hideous subdirectory projected file exists")
+590 PROCwrite(hideous$+".View.src.c.newsub","hideous subdir save"+CHR$13)
+600 PROCassert(FNexists(hideous$+".src.newsub/c"),"Hideous subdirectory save created backing src.newsub/c")
+610 PROCassert(FNexists(beautiful$+".View.src.submain/c"),"Beautiful subdirectory projected file exists")
+620 PROCwrite(beautiful$+".View.src.subnew/h","beautiful subdir save"+CHR$13)
+630 PROCassert(FNexists(beautiful$+".src.h.subnew"),"Beautiful subdirectory save created backing src.h.subnew")
+640 PROCassert(FNfirstbyte(collide$+".Hideous.View.c.collision")=ASC("P"),"Hideous collision reads projected backing file")
+650 PROCassert(FNfirstbyte(collide$+".Beautiful.View.collision/c")=ASC("P"),"Beautiful collision reads projected backing file")
+660 PROCassert(FNbyteat(hideous$+".View.h.defs",1)=ASC("d"),"Hideous BGET after PTR reads expected byte")
+670 PROCassert(FNgbpbfirst(beautiful$+".View.util/c")=ASC("v"),"Beautiful OS_GBPB read returns expected byte")
+680 PROCopen_many_read(hideous$+".View.h.defs",12,ASC("#"))
+690 PROCwrite(hideous$+".View.h.defs","updated hideous header"+CHR$13)
+700 PROCassert(FNfirstbyte(hideous$+".defs/h")=ASC("u"),"Hideous overwrite updated backing file")
+710 PROCassert(FNextent(hideous$+".View.h.defs")=LEN("updated hideous header"+CHR$13),"Hideous overwrite reports expected extent")
+720 PROCwrite(beautiful$+".View.util/c","updated beautiful source"+CHR$13)
+730 PROCassert(FNfirstbyte(beautiful$+".c.util")=ASC("u"),"Beautiful overwrite updated backing file")
+740 PROCassert(FNextent(beautiful$+".View.util/c")=LEN("updated beautiful source"+CHR$13),"Beautiful overwrite reports expected extent")
+750 PROCwrite(hideous$+".View.h.defs","h"+CHR$13)
+760 PROCassert(FNextent(hideous$+".View.h.defs")=LEN("h"+CHR$13),"Hideous shorter overwrite truncates extent")
+770 PROCwrite(beautiful$+".View.util/c","c"+CHR$13)
+780 PROCassert(FNextent(beautiful$+".View.util/c")=LEN("c"+CHR$13),"Beautiful shorter overwrite truncates extent")
+790 PROCwrite_gbpb(hideous$+".View.c.bulk","bulk hideous write"+CHR$13)
+800 PROCassert(FNexists(hideous$+".bulk/c"),"Hideous OS_GBPB write created backing bulk/c")
+810 PROCassert(FNfirstbyte(hideous$+".View.c.bulk")=ASC("b"),"Hideous OS_GBPB write content is readable")
+820 PROCassert(FNextent(hideous$+".View.c.bulk")=LEN("bulk hideous write"+CHR$13),"Hideous OS_GBPB write reports expected extent")
+830 PROCwrite_gbpb(beautiful$+".View.bulk/h","bulk beautiful write"+CHR$13)
+840 PROCassert(FNexists(beautiful$+".h.bulk"),"Beautiful OS_GBPB write created backing h.bulk")
+850 PROCassert(FNfirstbyte(beautiful$+".View.bulk/h")=ASC("b"),"Beautiful OS_GBPB write content is readable")
+860 PROCassert(FNexists(split$+".View.c.alpha"),"Split config maps first reverse directive")
+870 PROCassert(FNexists(split$+".View.cpp.beta"),"Split config maps longer reverse extension")
+880 PROCassert(FNexists(split$+".View.h.gamma"),"Split config maps second reverse directive")
+890 PROCassert(FNexists(split$+".View.s.delta")=0,"Split config does not map unlisted reverse extension")
+900 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
+910 PRINT "Test tree left at: ";root$
+920 END
 1000 DEF PROCsetup_hideous(d$)
 1010 PROCmkdir(d$)
 1020 PROCwrite_config(d$+".View","hideous")
@@ -213,9 +219,10 @@
 2610 SYS "OS_File",18,file$,type%
 2620 ENDPROC
 2700 DEF FNexists(file$)
-2710 LOCAL obj%
-2720 SYS "OS_File",5,file$ TO obj%
-2730 =obj%<>0
+2710 LOCAL obj%,flags%
+2720 SYS "XOS_File",5,file$ TO obj%;flags%
+2730 IF flags% AND 1 THEN =0
+2740 =obj%<>0
 2800 DEF FNisdir(file$)
 2810 LOCAL obj%
 2820 SYS "OS_File",5,file$ TO obj%

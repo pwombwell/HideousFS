@@ -40,6 +40,8 @@ The current assertions check:
   filetype.
 - Two image files in the same backing directory can use different `reverse`
   lists, and each view only maps the extension configured by that image.
+- Image files are hidden from image views, including sibling image files in a
+  directory with multiple image views.
 - Config files can contain comments, blank lines, and multiple `reverse`
   directives, including longer reverse extensions such as `cpp`.
 - Projected files inside a real subdirectory are readable and new projected
