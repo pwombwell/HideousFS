@@ -35,6 +35,8 @@ The current assertions check:
   filetype.
 - Two image files in the same backing directory can use different `reverse`
   lists, and each view only maps the extension configured by that image.
+- Config files can contain comments, blank lines, and multiple `reverse`
+  directives, including longer reverse extensions such as `cpp`.
 - Projected files inside a real subdirectory are readable and new projected
   saves inside that subdirectory create the expected backing paths.
 - Hideous and Beautiful collision cases read the projected backing object when

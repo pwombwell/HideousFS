@@ -9,10 +9,12 @@
 90 beautiful$=root$+".Beautiful"
 95 multi$=root$+".Multi"
 96 collide$=root$+".Collision"
+97 split$=root$+".Split"
 100 PROCsetup_hideous(hideous$)
 110 PROCsetup_beautiful(beautiful$)
 115 PROCsetup_multi(multi$)
 116 PROCsetup_collision(collide$)
+117 PROCsetup_split(split$)
 120 PRINT '"Catalogue: Hideous image view"
 130 OSCLI "Cat "+hideous$+".View"
 140 PRINT '"Catalogue: Beautiful image view"
@@ -64,9 +66,13 @@
 600 PROCwrite_gbpb(beautiful$+".View.bulk/h","bulk beautiful write"+CHR$13)
 610 PROCassert(FNexists(beautiful$+".h.bulk"),"Beautiful OS_GBPB write created backing h.bulk")
 620 PROCassert(FNfirstbyte(beautiful$+".View.bulk/h")=ASC("b"),"Beautiful OS_GBPB write content is readable")
-630 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
-640 PRINT "Test tree left at: ";root$
-650 END
+630 PROCassert(FNexists(split$+".View.c.alpha"),"Split config maps first reverse directive")
+640 PROCassert(FNexists(split$+".View.cpp.beta"),"Split config maps longer reverse extension")
+650 PROCassert(FNexists(split$+".View.h.gamma"),"Split config maps second reverse directive")
+660 PROCassert(FNexists(split$+".View.s.delta")=0,"Split config does not map unlisted reverse extension")
+670 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
+680 PRINT "Test tree left at: ";root$
+690 END
 1000 DEF PROCsetup_hideous(d$)
 1010 PROCmkdir(d$)
 1020 PROCwrite_config(d$+".View","hideous")
@@ -110,6 +116,18 @@
 1500 PROCwrite(d$+".Beautiful.c.collision","Projected beautiful collision"+CHR$13)
 1510 PROCwrite(d$+".Beautiful.collision/c","Raw beautiful collision"+CHR$13)
 1520 ENDPROC
+1530 DEF PROCsetup_split(d$)
+1540 PROCmkdir(d$)
+1550 PROCwrite_config_split(d$+".View")
+1560 PROCmkdir(d$+".alpha")
+1570 PROCwrite(d$+".alpha/c","split c"+CHR$13)
+1580 PROCmkdir(d$+".beta")
+1590 PROCwrite(d$+".beta/cpp","split cpp"+CHR$13)
+1595 PROCmkdir(d$+".gamma")
+1596 PROCwrite(d$+".gamma/h","split h"+CHR$13)
+1597 PROCmkdir(d$+".delta")
+1598 PROCwrite(d$+".delta/s","split s"+CHR$13)
+1599 ENDPROC
 1600 DEF PROCwrite_config(file$,mode$)
 1610 PROCwrite_config_ext(file$,mode$,"c h s o a cpp c++")
 1620 ENDPROC
@@ -118,6 +136,11 @@
 1720 PROCwrite(file$,text$)
 1730 SYS "OS_File",18,file$,&001
 1740 ENDPROC
+1750 DEF PROCwrite_config_split(file$)
+1760 text$="# HideousFS"+CHR$13+CHR$13+"# split reverse list"+CHR$13+"mode hideous"+CHR$13+"reverse c"+CHR$13+"reverse cpp h"+CHR$13
+1770 PROCwrite(file$,text$)
+1780 SYS "OS_File",18,file$,&001
+1790 ENDPROC
 1800 DEF PROCmkdir(d$)
 1810 LOCAL obj%
 1820 SYS "OS_File",5,d$ TO obj%
