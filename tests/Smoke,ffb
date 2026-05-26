@@ -19,9 +19,23 @@
 190 PROCwrite(beautiful$+".View.header/h","beautiful save"+CHR$13)
 200 PROCassert(FNisdir(beautiful$+".h"),"Beautiful save created h backing bucket")
 210 PROCassert(FNexists(beautiful$+".h.header"),"Beautiful save created backing h.header")
-220 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
-230 PRINT "Test tree left at: ";root$
-240 END
+220 PROCrename(hideous$+".View.c.main",hideous$+".View.c.renamed")
+230 PROCassert(FNexists(hideous$+".main/c")=0,"Hideous rename removed backing main/c")
+240 PROCassert(FNexists(hideous$+".renamed/c"),"Hideous rename created backing renamed/c")
+250 PROCrename(beautiful$+".View.main/c",beautiful$+".View.renamed/c")
+260 PROCassert(FNexists(beautiful$+".c.main")=0,"Beautiful rename removed backing c.main")
+270 PROCassert(FNexists(beautiful$+".c.renamed"),"Beautiful rename created backing c.renamed")
+280 PROCdelete(hideous$+".View.c.renamed")
+290 PROCassert(FNexists(hideous$+".renamed/c")=0,"Hideous delete removed backing renamed/c")
+300 PROCdelete(beautiful$+".View.renamed/c")
+310 PROCassert(FNexists(beautiful$+".c.renamed")=0,"Beautiful delete removed backing c.renamed")
+320 PROCdelete(hideous$+".View.Readme")
+330 PROCassert(FNexists(hideous$+".Readme")=0,"Hideous delete removed pass-through Readme")
+340 PROCdelete(beautiful$+".View.Readme")
+350 PROCassert(FNexists(beautiful$+".Readme")=0,"Beautiful delete removed pass-through Readme")
+360 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
+370 PRINT "Test tree left at: ";root$
+380 END
 1000 DEF PROCsetup_hideous(d$)
 1010 PROCmkdir(d$)
 1020 PROCwrite_config(d$+".View","hideous")
@@ -60,15 +74,21 @@
 1500 DEF PROCassert(ok%,msg$)
 1510 IF ok% THEN PRINT "PASS: ";msg$ ELSE PRINT "FAIL: ";msg$:errors%=errors%+1
 1520 ENDPROC
-1600 DEF FNexists(file$)
-1610 LOCAL obj%
-1620 SYS "OS_File",5,file$ TO obj%
-1630 =obj%<>0
-1700 DEF FNisdir(file$)
-1710 LOCAL obj%
-1720 SYS "OS_File",5,file$ TO obj%
-1730 =obj%=2
-1800 DEF PROCerror
-1810 PRINT '"ERROR: ";REPORT$;" at line ";ERL
-1820 PRINT "Test tree left at: ";root$
-1830 ENDPROC
+1600 DEF PROCrename(from$,to$)
+1610 OSCLI "Rename "+from$+" "+to$
+1620 ENDPROC
+1700 DEF PROCdelete(file$)
+1710 SYS "OS_File",6,file$
+1720 ENDPROC
+1800 DEF FNexists(file$)
+1810 LOCAL obj%
+1820 SYS "OS_File",5,file$ TO obj%
+1830 =obj%<>0
+1900 DEF FNisdir(file$)
+1910 LOCAL obj%
+1920 SYS "OS_File",5,file$ TO obj%
+1930 =obj%=2
+9000 DEF PROCerror
+9010 PRINT '"ERROR: ";REPORT$;" at line ";ERL
+9020 PRINT "Test tree left at: ";root$
+9030 ENDPROC

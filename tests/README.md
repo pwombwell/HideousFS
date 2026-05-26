@@ -25,6 +25,11 @@ The current assertions check:
 - Beautiful mode starts with no `h` backing bucket.
 - Beautiful mode can save `header/h` through the image view and create backing
   path `h.header`.
+- Hideous mode can rename `c.main` to `c.renamed` and move backing
+  `main/c` to `renamed/c`.
+- Beautiful mode can rename `main/c` to `renamed/c` and move backing
+  `c.main` to `c.renamed`.
+- Projected and pass-through deletes remove the expected backing objects.
 
 The program leaves the generated test tree in place so it can be inspected
 after a failure.
