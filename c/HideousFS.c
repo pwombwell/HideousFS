@@ -50,6 +50,8 @@ enum {
     fsopen_CreateUpdate = 1,
     fsopen_Update = 2,
 
+    fsargs_ReadPTR = 0,
+    fsargs_SetPTR = 1,
     fsargs_SetEXT = 3,
     fsargs_ReadEXT = 2,
     fsargs_ReadSize = 4,
@@ -132,6 +134,7 @@ typedef struct HideousFS_File {
     int is_directory;
     int writable;
     word os_handle;
+    word ptr;
     word loadaddr;
     word execaddr;
     word extent;
@@ -471,6 +474,7 @@ static void release_file_handle(HideousFS_File *file)
     file->is_directory = 0;
     file->writable = 0;
     file->os_handle = 0;
+    file->ptr = 0;
     file->backing_path[0] = '\0';
 }
 
@@ -771,6 +775,7 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
             file->is_directory = 1;
             file->writable = 0;
             file->os_handle = 0;
+            file->ptr = 0;
             file->loadaddr = 0;
             file->execaddr = 0;
             file->extent = 0;
@@ -859,6 +864,7 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
 
     file->is_directory = cat_entry.type == object_directory;
     file->writable = writable && !file->is_directory;
+    file->ptr = 0;
     file->loadaddr = cat_entry.loadaddr;
     file->execaddr = cat_entry.execaddr;
     file->extent = open_mode == fsopen_CreateUpdate ? 0 : cat_entry.filelen;
@@ -893,6 +899,7 @@ _kernel_oserror *hideousfs_fsentry_getbytes_handler(_kernel_swi_regs *regs, void
 {
     HideousFS_File *file = (HideousFS_File *)regs->r[1];
     _kernel_swi_regs os_regs;
+    _kernel_oserror *error;
 
     (void)private_word;
 
@@ -906,7 +913,11 @@ _kernel_oserror *hideousfs_fsentry_getbytes_handler(_kernel_swi_regs *regs, void
     os_regs.r[3] = regs->r[3];
     os_regs.r[4] = regs->r[4];
 
-    return _kernel_swi(OS_GBPB, &os_regs, &os_regs);
+    error = _kernel_swi(OS_GBPB, &os_regs, &os_regs);
+    if (error == NULL) {
+        file->ptr = (word)regs->r[4] + (word)regs->r[3];
+    }
+    return error;
 }
 
 _kernel_oserror *hideousfs_fsentry_putbytes_handler(_kernel_swi_regs *regs, void *private_word)
@@ -928,6 +939,7 @@ _kernel_oserror *hideousfs_fsentry_putbytes_handler(_kernel_swi_regs *regs, void
         error = _kernel_swi(OS_BPut, &os_regs, &os_regs);
         if (error == NULL) {
             file->extent++;
+            file->ptr++;
         }
         return error;
     }
@@ -944,6 +956,7 @@ _kernel_oserror *hideousfs_fsentry_putbytes_handler(_kernel_swi_regs *regs, void
         if (end_offset > file->extent) {
             file->extent = end_offset;
         }
+        file->ptr = end_offset;
     }
     return error;
 }
@@ -959,6 +972,14 @@ _kernel_oserror *hideousfs_fsentry_args_handler(_kernel_swi_regs *regs, void *pr
     }
 
     switch (regs->r[0]) {
+    case fsargs_ReadPTR:
+        regs->r[2] = (int)file->ptr;
+        return NULL;
+
+    case fsargs_SetPTR:
+        file->ptr = (word)regs->r[2];
+        return NULL;
+
     case fsargs_SetEXT:
         if (file->is_directory || !file->writable) {
             return (_kernel_oserror *)&err_not_found;
