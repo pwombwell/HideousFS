@@ -1,0 +1,68 @@
+SHELL := /bin/bash
+
+TOOLCHAIN_BIN ?= /Users/piers/Develop/GitHub/aof-toolchain/bin
+TOOLCHAIN_LIB ?= $(abspath $(TOOLCHAIN_BIN)/../lib)
+
+CC = $(TOOLCHAIN_BIN)/ncc-riscos
+AS = $(TOOLCHAIN_BIN)/asasm
+CMUNGE = $(TOOLCHAIN_BIN)/cmunge
+DRLINK = $(TOOLCHAIN_BIN)/drlink
+
+BUILD_DIR ?= build/macos
+CMHG_DIR := $(BUILD_DIR)/generated
+OBJ_DIR := $(BUILD_DIR)/obj
+MODULE_DIR := $(BUILD_DIR)/modules
+
+CMHG_SPEC := cmhg/HideousFS
+CMHG_HDR := $(CMHG_DIR)/cmhg.h
+CMHG_ASM := $(CMHG_DIR)/cmhg.s
+CMHG_OBJ := $(OBJ_DIR)/cmhg.o
+CMHG_DEP := $(CMHG_DIR)/cmunge.d
+
+SRCS := c/HideousFS.c
+OBJS := $(patsubst c/%.c,$(OBJ_DIR)/%.o,$(SRCS))
+DEPS := $(OBJS:.o=.d) $(CMHG_OBJ:.o=.d) $(CMHG_DEP)
+
+MODULE := $(MODULE_DIR)/HideousFS
+
+INCLUDES := -I$(CMHG_DIR) -I/Users/piers/Develop/GitHub/aof-toolchain/norcroft/external/clib/include
+CFLAGS ?= -zM $(INCLUDES)
+ASFLAGS ?= -aof
+CMUNGEFLAGS ?= -32bit -tnorcroft
+DRLINKFLAGS ?= -m
+LDLIBS ?= $(TOOLCHAIN_LIB)/stubs.a
+
+.DEFAULT_GOAL := all
+
+.PHONY: all clean check-tools
+
+all: check-tools $(MODULE)
+	@echo "Built module: $(MODULE)"
+
+check-tools:
+	@command -v "$(CC)" >/dev/null 2>&1 || { echo "error: compiler '$(CC)' not found"; exit 1; }
+	@command -v "$(AS)" >/dev/null 2>&1 || { echo "error: assembler '$(AS)' not found"; exit 1; }
+	@command -v "$(CMUNGE)" >/dev/null 2>&1 || { echo "error: cmunge '$(CMUNGE)' not found"; exit 1; }
+	@command -v "$(DRLINK)" >/dev/null 2>&1 || { echo "error: linker '$(DRLINK)' not found"; exit 1; }
+
+$(CMHG_HDR) $(CMHG_ASM): $(CMHG_SPEC)
+	@mkdir -p "$(CMHG_DIR)"
+	$(CMUNGE) $(CMUNGEFLAGS) -depend "$(CMHG_DEP)" -d "$(CMHG_HDR)" -s "$(CMHG_ASM)" "$<"
+
+$(CMHG_OBJ): $(CMHG_ASM)
+	@mkdir -p "$(@D)"
+	$(AS) $(ASFLAGS) -Depend="$(@:.o=.d)" -i. -i$(CMHG_DIR) -o "$@" "$<"
+
+$(OBJ_DIR)/%.o: c/%.c $(CMHG_HDR)
+	@mkdir -p "$(@D)"
+	$(CC) $(CFLAGS) -M "$<" | sed "s|^[^:]*:|$@:|" > "$(@:.o=.d)"
+	$(CC) $(CFLAGS) -c "$<" -o "$@"
+
+$(MODULE): $(CMHG_OBJ) $(OBJS)
+	@mkdir -p "$(@D)"
+	$(DRLINK) $(DRLINKFLAGS) -o "$@" $(CMHG_OBJ) $(OBJS) $(LDLIBS)
+
+clean:
+	rm -rf "$(BUILD_DIR)"
+
+-include $(DEPS)

@@ -1,0 +1,15 @@
+; Module header description file for HideousFS.
+
+title-string: HideousFS
+help-string:  HideousFS 0.01
+
+initialisation-code: hideousfs_initialise
+finalisation-code: hideousfs_finalise
+
+generic-veneers: hideousfs_fsentry_open,
+                 hideousfs_fsentry_getbytes,
+                 hideousfs_fsentry_putbytes,
+                 hideousfs_fsentry_args,
+                 hideousfs_fsentry_close,
+                 hideousfs_fsentry_file,
+                 hideousfs_fsentry_func
