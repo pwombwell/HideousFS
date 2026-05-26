@@ -46,6 +46,7 @@ enum {
     fsfile_Create = 7,
     fsfile_CreateDir = 8,
     fsfile_ReadBlockSize = 10,
+    fsfile_WriteFileType = 18,
 
     fsopen_ReadOnly = 0,
     fsopen_CreateUpdate = 1,
@@ -1496,6 +1497,7 @@ _kernel_oserror *hideousfs_fsentry_file_handler(_kernel_swi_regs *regs, void *pr
     case fsfile_WriteExec:
     case fsfile_WriteAttr:
     case fsfile_Delete:
+    case fsfile_WriteFileType:
         if (!build_writable_object_path(image, (const char *)regs->r[1],
                                         path_buffer, sizeof(path_buffer))) {
             return (_kernel_oserror *)&err_not_found;

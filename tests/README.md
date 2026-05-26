@@ -30,6 +30,9 @@ The current assertions check:
 - Beautiful mode can rename `main/c` to `renamed/c` and move backing
   `c.main` to `c.renamed`.
 - Projected and pass-through deletes remove the expected backing objects.
+- Projected files in both modes can have their filetype set to BASIC
+  (`&FFB`) through the image view, and the backing objects report the same
+  filetype.
 
 The program leaves the generated test tree in place so it can be inspected
 after a failure.
