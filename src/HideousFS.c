@@ -284,6 +284,25 @@ static const char *skip_root_prefix(const char *name)
     return name;
 }
 
+static int path_has_mapped_component(const HideousFS_Image *image,
+                                     const char *name)
+{
+    const char *component = skip_root_prefix(name);
+
+    while (component != NULL && component[0] != '\0') {
+        const char *dot = strchr(component, '.');
+        size_t len = dot == NULL ? strlen(component) : (size_t)(dot - component);
+
+        if (mapped_extension_index(image, component, len) >= 0) {
+            return 1;
+        }
+
+        component = dot == NULL ? NULL : dot + 1;
+    }
+
+    return 0;
+}
+
 static int append_relative_to_backing(const HideousFS_Image *image,
                                       const char *relative,
                                       char *dest, size_t dest_size)
@@ -349,6 +368,44 @@ static int build_backing_object_path(const HideousFS_Image *image,
     }
 
     relative = skip_root_prefix(name);
+
+    if (image->beautiful_mode) {
+        const char *slash;
+
+        leaf = last_component(relative);
+        slash = strrchr(leaf, '/');
+        if (slash == NULL || slash == leaf || slash[1] == '\0' ||
+            mapped_extension_index(image, slash + 1, strlen(slash + 1)) < 0) {
+            return append_relative_to_backing(image, relative, dest, dest_size);
+        }
+
+        prefix_end = leaf == relative ? leaf : leaf - 1;
+        prefix_len = (size_t)(prefix_end - relative);
+        leaf_len = (size_t)(slash - leaf);
+        extension = slash + 1;
+        extension_len = strlen(extension);
+        dir_len = strlen(image->backing_dir);
+
+        if (dir_len + 1 + prefix_len + (prefix_len == 0 ? 0 : 1) +
+            extension_len + 1 + leaf_len >= dest_size) {
+            return 0;
+        }
+
+        memcpy(dest, image->backing_dir, dir_len);
+        dest[dir_len++] = '.';
+        if (prefix_len != 0) {
+            memcpy(dest + dir_len, relative, prefix_len);
+            dir_len += prefix_len;
+            dest[dir_len++] = '.';
+        }
+        memcpy(dest + dir_len, extension, extension_len);
+        dir_len += extension_len;
+        dest[dir_len++] = '.';
+        memcpy(dest + dir_len, leaf, leaf_len);
+        dest[dir_len + leaf_len] = '\0';
+        return 1;
+    }
+
     leaf = last_component(relative);
     extension = previous_component(relative, leaf);
 
@@ -405,6 +462,10 @@ static int resolve_directory_path(const HideousFS_Image *image,
     }
 
     relative = skip_root_prefix(name);
+    if (image->beautiful_mode) {
+        return append_relative_to_backing(image, relative, dest, dest_size);
+    }
+
     component = last_component(relative);
     extension_len = strlen(component);
 
@@ -795,7 +856,15 @@ static int build_writable_object_path(const HideousFS_Image *image,
                                       const char *name,
                                       char *dest, size_t dest_size)
 {
-    if (is_active_image_path(image, name) ||
+    if (is_active_image_path(image, name)) {
+        return 0;
+    }
+
+    if (image->beautiful_mode && path_has_mapped_component(image, name)) {
+        return 0;
+    }
+
+    if (!image->beautiful_mode &&
         is_mapped_extension(image, last_component(skip_root_prefix(name)))) {
         return 0;
     }
@@ -803,23 +872,13 @@ static int build_writable_object_path(const HideousFS_Image *image,
     return build_backing_object_path(image, name, dest, dest_size);
 }
 
-static int path_has_mapped_component(const HideousFS_Image *image,
-                                     const char *name)
+static int is_hidden_object_path(const HideousFS_Image *image, const char *name)
 {
-    const char *component = skip_root_prefix(name);
-
-    while (component != NULL && component[0] != '\0') {
-        const char *dot = strchr(component, '.');
-        size_t len = dot == NULL ? strlen(component) : (size_t)(dot - component);
-
-        if (mapped_extension_index(image, component, len) >= 0) {
-            return 1;
-        }
-
-        component = dot == NULL ? NULL : dot + 1;
+    if (image->beautiful_mode) {
+        return path_has_mapped_component(image, name);
     }
 
-    return 0;
+    return is_mapped_extension(image, last_component(skip_root_prefix(name)));
 }
 
 static int build_writable_directory_path(const HideousFS_Image *image,
@@ -833,6 +892,10 @@ static int build_writable_directory_path(const HideousFS_Image *image,
 
     if (is_root_name(name)) {
         return 0;
+    }
+
+    if (image->beautiful_mode) {
+        return build_backing_object_path(image, name, dest, dest_size);
     }
 
     return append_relative_to_backing(image, skip_root_prefix(name),
@@ -1051,8 +1114,7 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
         return (_kernel_oserror *)&err_path_too_long;
     }
 
-    if (is_mapped_extension(image,
-                            last_component(skip_root_prefix((const char *)regs->r[1])))) {
+    if (is_hidden_object_path(image, (const char *)regs->r[1])) {
         return (_kernel_oserror *)&err_not_found;
     }
 
@@ -1399,8 +1461,7 @@ _kernel_oserror *hideousfs_fsentry_file_handler(_kernel_swi_regs *regs, void *pr
         if (error != NULL) {
             return error;
         }
-        if (is_mapped_extension(image,
-                                last_component(skip_root_prefix((const char *)regs->r[1])))) {
+        if (is_hidden_object_path(image, (const char *)regs->r[1])) {
             return (_kernel_oserror *)&err_not_found;
         }
 
@@ -1451,6 +1512,217 @@ static void write_dir_entry(char *dest, const FS_entry_info *source,
     }
 }
 
+static int append_leaf_slash_extension(char *dest, size_t dest_size,
+                                       const char *leaf,
+                                       const char *extension)
+{
+    size_t leaf_len = strlen(leaf);
+    size_t extension_len = strlen(extension);
+
+    if (leaf_len + 1 + extension_len >= dest_size) {
+        return 0;
+    }
+
+    memcpy(dest, leaf, leaf_len);
+    dest[leaf_len] = '/';
+    memcpy(dest + leaf_len + 1, extension, extension_len + 1);
+    return 1;
+}
+
+static void emit_projected_dir_entry(char *dest, word *used,
+                                     word *output_count,
+                                     word *projected_index,
+                                     int *next_offset, int *stop,
+                                     word requested_offset, word num,
+                                     word buffer_len,
+                                     const FS_entry_info *source,
+                                     const char *projected_name,
+                                     int with_info,
+                                     int synthetic_directory)
+{
+    word entry_size;
+
+    if (*projected_index < requested_offset) {
+        (*projected_index)++;
+        return;
+    }
+
+    entry_size = dir_entry_size(projected_name, with_info);
+    if (*used + entry_size > buffer_len) {
+        *next_offset = (int)*projected_index;
+        *stop = 1;
+        return;
+    }
+
+    write_dir_entry(dest + *used, source, projected_name, with_info,
+                    synthetic_directory);
+    *used += entry_size;
+    (*output_count)++;
+    (*projected_index)++;
+
+    if (*output_count == num) {
+        *next_offset = (int)*projected_index;
+        *stop = 1;
+    }
+}
+
+static void finish_read_dir(_kernel_swi_regs *regs, word output_count,
+                            int next_offset)
+{
+    dir_block.objects_read = output_count;
+    dir_block.next_offset = next_offset;
+    regs->r[3] = (int)dir_block.objects_read;
+    regs->r[4] = dir_block.next_offset;
+}
+
+static _kernel_oserror *read_beautiful_dir(_kernel_swi_regs *regs,
+                                           int with_info)
+{
+    HideousFS_Image *image = (HideousFS_Image *)regs->r[6];
+    const char *dir_name = (const char *)regs->r[1];
+    char *dest = (char *)regs->r[2];
+    word num = (word)regs->r[3];
+    word buffer_len = (word)regs->r[5];
+    word used = 0;
+    word output_count = 0;
+    word projected_index = 0;
+    word requested_offset = (word)regs->r[4];
+    int backing_offset = 0;
+    int next_offset = -1;
+    int stop = 0;
+    _kernel_oserror *error;
+
+    if (path_has_mapped_component(image, dir_name)) {
+        return (_kernel_oserror *)&err_not_found;
+    }
+
+    if (!build_backing_object_path(image, dir_name,
+                                   path_buffer, sizeof(path_buffer))) {
+        return (_kernel_oserror *)&err_path_too_long;
+    }
+
+    if ((int)requested_offset == -1 || num == 0) {
+        regs->r[3] = 0;
+        regs->r[4] = -1;
+        return NULL;
+    }
+
+    while (backing_offset != -1 && !stop) {
+        _kernel_swi_regs os_regs;
+        FS_entry_info *source;
+        char projected_name[MaxPath];
+        const char *leaf;
+        int extension_index;
+        int skip = 0;
+
+        os_regs.r[0] = OSGBPB_DirEntriesInfo;
+        os_regs.r[1] = (int)path_buffer;
+        os_regs.r[2] = (int)temp_buffer;
+        os_regs.r[3] = 1;
+        os_regs.r[4] = backing_offset;
+        os_regs.r[5] = TempBufferSize;
+        os_regs.r[6] = 0;
+
+        error = _kernel_swi(OS_GBPB, &os_regs, &os_regs);
+        if (error != NULL) {
+            return error;
+        }
+
+        backing_offset = os_regs.r[4];
+        if (os_regs.r[3] == 0) {
+            break;
+        }
+
+        source = (FS_entry_info *)temp_buffer;
+        leaf = source->fname;
+
+        if (is_active_image_entry(image, dir_name, leaf)) {
+            skip = 1;
+        }
+
+        extension_index = mapped_extension_index(image, leaf, strlen(leaf));
+        if (!skip && extension_index >= 0) {
+            if (source->type == object_directory) {
+                char mapped_dir[MaxPath];
+                int nested_offset = 0;
+                size_t dir_len = strlen(path_buffer);
+                size_t leaf_len = strlen(leaf);
+
+                if (dir_len + 1 + leaf_len >= sizeof(mapped_dir)) {
+                    return (_kernel_oserror *)&err_path_too_long;
+                }
+                memcpy(mapped_dir, path_buffer, dir_len);
+                mapped_dir[dir_len] = '.';
+                memcpy(mapped_dir + dir_len + 1, leaf, leaf_len + 1);
+
+                while (nested_offset != -1 && !stop) {
+                    FS_entry_info *child;
+
+                    os_regs.r[0] = OSGBPB_DirEntriesInfo;
+                    os_regs.r[1] = (int)mapped_dir;
+                    os_regs.r[2] = (int)temp_buffer;
+                    os_regs.r[3] = 1;
+                    os_regs.r[4] = nested_offset;
+                    os_regs.r[5] = TempBufferSize;
+                    os_regs.r[6] = 0;
+
+                    error = _kernel_swi(OS_GBPB, &os_regs, &os_regs);
+                    if (error != NULL) {
+                        return error;
+                    }
+
+                    nested_offset = os_regs.r[4];
+                    if (os_regs.r[3] == 0) {
+                        break;
+                    }
+
+                    child = (FS_entry_info *)temp_buffer;
+                    if (!append_leaf_slash_extension(projected_name,
+                                                     sizeof(projected_name),
+                                                     child->fname,
+                                                     image->reverse_extensions[extension_index])) {
+                        return (_kernel_oserror *)&err_path_too_long;
+                    }
+
+                    emit_projected_dir_entry(dest, &used, &output_count,
+                                             &projected_index, &next_offset,
+                                             &stop, requested_offset, num,
+                                             buffer_len, child, projected_name,
+                                             with_info, 0);
+                }
+            }
+            skip = 1;
+        }
+
+        if (!skip && host_leaf_extension_index(image, leaf, NULL) >= 0) {
+            skip = 1;
+        }
+
+        if (!skip) {
+            if (!copy_string(projected_name, sizeof(projected_name), leaf)) {
+                return (_kernel_oserror *)&err_path_too_long;
+            }
+            emit_projected_dir_entry(dest, &used, &output_count,
+                                     &projected_index, &next_offset, &stop,
+                                     requested_offset, num, buffer_len, source,
+                                     projected_name, with_info, 0);
+        }
+    }
+
+    if (!stop && backing_offset == -1) {
+        next_offset = -1;
+    } else if (!stop && next_offset == -1 && output_count != 0) {
+        next_offset = (int)projected_index;
+    }
+
+    if (output_count == 0 && next_offset != -1) {
+        return (_kernel_oserror *)&err_buffer_too_small;
+    }
+
+    finish_read_dir(regs, output_count, next_offset);
+    return NULL;
+}
+
 static _kernel_oserror *read_dir(_kernel_swi_regs *regs, int with_info)
 {
     HideousFS_Image *image = (HideousFS_Image *)regs->r[6];
@@ -1473,6 +1745,10 @@ static _kernel_oserror *read_dir(_kernel_swi_regs *regs, int with_info)
 
     if (image == NULL || !image->in_use) {
         return (_kernel_oserror *)&err_not_found;
+    }
+
+    if (image->beautiful_mode) {
+        return read_beautiful_dir(regs, with_info);
     }
 
     if (!resolve_directory_path(image, dir_name, path_buffer, sizeof(path_buffer),
