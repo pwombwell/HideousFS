@@ -48,8 +48,8 @@ The current assertions check:
   saves inside that subdirectory create the expected backing paths.
 - Hideous and Beautiful collision cases read the projected backing object when
   a raw backing object could otherwise appear at the same image path.
-- Single-byte reads after setting `PTR#`, bulk `OS_GBPB` reads, and bulk
-  `OS_GBPB` writes through projected paths behave as expected.
+- Single-byte reads and writes after setting `PTR#`, bulk `OS_GBPB` reads,
+  and bulk `OS_GBPB` writes through projected paths behave as expected.
 - Several projected read handles can be open at once and still read the
   expected data.
 - A projected file written through `OS_GBPB` reports the expected extent.

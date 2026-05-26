@@ -82,20 +82,24 @@
 760 PROCassert(FNextent(hideous$+".View.h.defs")=LEN("h"+CHR$13),"Hideous shorter overwrite truncates extent")
 770 PROCwrite(beautiful$+".View.util/c","c"+CHR$13)
 780 PROCassert(FNextent(beautiful$+".View.util/c")=LEN("c"+CHR$13),"Beautiful shorter overwrite truncates extent")
-790 PROCwrite_gbpb(hideous$+".View.c.bulk","bulk hideous write"+CHR$13)
-800 PROCassert(FNexists(hideous$+".bulk/c"),"Hideous OS_GBPB write created backing bulk/c")
-810 PROCassert(FNfirstbyte(hideous$+".View.c.bulk")=ASC("b"),"Hideous OS_GBPB write content is readable")
-820 PROCassert(FNextent(hideous$+".View.c.bulk")=LEN("bulk hideous write"+CHR$13),"Hideous OS_GBPB write reports expected extent")
-830 PROCwrite_gbpb(beautiful$+".View.bulk/h","bulk beautiful write"+CHR$13)
-840 PROCassert(FNexists(beautiful$+".h.bulk"),"Beautiful OS_GBPB write created backing h.bulk")
-850 PROCassert(FNfirstbyte(beautiful$+".View.bulk/h")=ASC("b"),"Beautiful OS_GBPB write content is readable")
-860 PROCassert(FNexists(split$+".View.c.alpha"),"Split config maps first reverse directive")
-870 PROCassert(FNexists(split$+".View.cpp.beta"),"Split config maps longer reverse extension")
-880 PROCassert(FNexists(split$+".View.h.gamma"),"Split config maps second reverse directive")
-890 PROCassert(FNexists(split$+".View.s.delta")=0,"Split config does not map unlisted reverse extension")
-900 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
-910 PRINT "Test tree left at: ";root$
-920 END
+790 PROCpoke_byte(hideous$+".View.h.defs",1,ASC("!"))
+800 PROCassert(FNbyteat(hideous$+".defs/h",1)=ASC("!"),"Hideous BPUT after PTR updated backing file")
+810 PROCpoke_byte(beautiful$+".View.util/c",1,ASC("!"))
+820 PROCassert(FNbyteat(beautiful$+".c.util",1)=ASC("!"),"Beautiful BPUT after PTR updated backing file")
+830 PROCwrite_gbpb(hideous$+".View.c.bulk","bulk hideous write"+CHR$13)
+840 PROCassert(FNexists(hideous$+".bulk/c"),"Hideous OS_GBPB write created backing bulk/c")
+850 PROCassert(FNfirstbyte(hideous$+".View.c.bulk")=ASC("b"),"Hideous OS_GBPB write content is readable")
+860 PROCassert(FNextent(hideous$+".View.c.bulk")=LEN("bulk hideous write"+CHR$13),"Hideous OS_GBPB write reports expected extent")
+870 PROCwrite_gbpb(beautiful$+".View.bulk/h","bulk beautiful write"+CHR$13)
+880 PROCassert(FNexists(beautiful$+".h.bulk"),"Beautiful OS_GBPB write created backing h.bulk")
+890 PROCassert(FNfirstbyte(beautiful$+".View.bulk/h")=ASC("b"),"Beautiful OS_GBPB write content is readable")
+900 PROCassert(FNexists(split$+".View.c.alpha"),"Split config maps first reverse directive")
+910 PROCassert(FNexists(split$+".View.cpp.beta"),"Split config maps longer reverse extension")
+920 PROCassert(FNexists(split$+".View.h.gamma"),"Split config maps second reverse directive")
+930 PROCassert(FNexists(split$+".View.s.delta")=0,"Split config does not map unlisted reverse extension")
+940 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
+950 PRINT "Test tree left at: ";root$
+960 END
 1000 DEF PROCsetup_hideous(d$)
 1010 PROCmkdir(d$)
 1020 PROCwrite_config(d$+".View","hideous")
@@ -192,20 +196,28 @@
 2080 CLOSE#ch%
 2090 IF unwritten%<>0 THEN PRINT "OS_GBPB write left ";unwritten%;" bytes unwritten: ";file$:errors%=errors%+1
 2100 ENDPROC
-2110 DEF PROCopen_many_read(file$,count%,expect%)
-2120 LOCAL i%,byte%
-2130 DIM openhandles%(count%-1)
-2140 FOR i%=0 TO count%-1
-2150 openhandles%(i%)=OPENIN(file$)
-2160 IF openhandles%(i%)=0 THEN PRINT "Unable to open projected file handle ";i%;" for ";file$:errors%=errors%+1
-2170 NEXT
-2180 FOR i%=0 TO count%-1
-2190 IF openhandles%(i%)<>0 THEN byte%=BGET#openhandles%(i%):PROCassert(byte%=expect%,"Projected file handle "+STR$(i%)+" reads expected byte")
-2200 NEXT
-2210 FOR i%=0 TO count%-1
-2220 IF openhandles%(i%)<>0 THEN CLOSE#openhandles%(i%)
-2230 NEXT
-2240 ENDPROC
+2110 DEF PROCpoke_byte(file$,offset%,byte%)
+2120 LOCAL ch%
+2130 ch%=OPENUP(file$)
+2140 IF ch%=0 THEN PRINT "Unable to open for update: ";file$:errors%=errors%+1:ENDPROC
+2150 PTR#ch%=offset%
+2160 BPUT#ch%,byte%
+2170 CLOSE#ch%
+2180 ENDPROC
+2200 DEF PROCopen_many_read(file$,count%,expect%)
+2210 LOCAL i%,byte%
+2220 DIM openhandles%(count%-1)
+2230 FOR i%=0 TO count%-1
+2240 openhandles%(i%)=OPENIN(file$)
+2250 IF openhandles%(i%)=0 THEN PRINT "Unable to open projected file handle ";i%;" for ";file$:errors%=errors%+1
+2260 NEXT
+2270 FOR i%=0 TO count%-1
+2280 IF openhandles%(i%)<>0 THEN byte%=BGET#openhandles%(i%):PROCassert(byte%=expect%,"Projected file handle "+STR$(i%)+" reads expected byte")
+2290 NEXT
+2292 FOR i%=0 TO count%-1
+2294 IF openhandles%(i%)<>0 THEN CLOSE#openhandles%(i%)
+2296 NEXT
+2298 ENDPROC
 2300 DEF PROCassert(ok%,msg$)
 2310 IF ok% THEN PRINT "PASS: ";msg$ ELSE PRINT "FAIL: ";msg$:errors%=errors%+1
 2320 ENDPROC
