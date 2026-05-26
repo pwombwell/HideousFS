@@ -1028,7 +1028,8 @@ _kernel_oserror *hideousfs_fsentry_close_handler(_kernel_swi_regs *regs, void *p
         os_regs.r[0] = OSFind_Close;
         os_regs.r[1] = (int)file->os_handle;
         error = _kernel_swi(OS_Find, &os_regs, &os_regs);
-        if (error == NULL && file->writable) {
+        if (error == NULL && file->writable &&
+            (regs->r[2] != 0 || regs->r[3] != 0)) {
             file->loadaddr = (word)regs->r[2];
             file->execaddr = (word)regs->r[3];
             error = write_file_info(file->backing_path, file->loadaddr,
