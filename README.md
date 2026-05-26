@@ -1,4 +1,3 @@
-```
 # HideousFS
 
 HideousFS is a RISC OS image filing system that presents a transformed view of a directory.
@@ -24,6 +23,8 @@ During development the image filetype is:
 ```
 
 This is a temporary user-area filetype and may clash with existing uses such as music files.
+
+![Screenshot of HideousFS directory view](docs/screenshot.png)
 
 ## Hideous mode
 
