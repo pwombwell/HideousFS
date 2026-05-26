@@ -1378,6 +1378,8 @@ _kernel_oserror *hideousfs_fsentry_getbytes_handler(_kernel_swi_regs *regs, void
                          &unread);
     if (error == NULL) {
         file->ptr = start_offset + requested - unread;
+        regs->r[3] = (int)unread;
+        regs->r[4] = (int)file->ptr;
     }
     return error;
 }
@@ -1439,6 +1441,8 @@ _kernel_oserror *hideousfs_fsentry_putbytes_handler(_kernel_swi_regs *regs, void
             file->extent = end_offset;
         }
         file->ptr = end_offset;
+        regs->r[3] = (int)unwritten;
+        regs->r[4] = (int)file->ptr;
     }
     return error;
 }
