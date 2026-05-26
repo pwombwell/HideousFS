@@ -350,6 +350,37 @@ static const char *previous_component(const char *name, const char *component)
     return scan;
 }
 
+static int is_projected_object_name(const HideousFS_Image *image,
+                                    const char *name)
+{
+    const char *relative;
+    const char *leaf;
+    const char *extension;
+
+    if (is_root_name(name)) {
+        return 0;
+    }
+
+    relative = skip_root_prefix(name);
+    leaf = last_component(relative);
+
+    if (image->beautiful_mode) {
+        const char *slash = strrchr(leaf, '/');
+
+        return slash != NULL && slash != leaf && slash[1] != '\0' &&
+               mapped_extension_index(image, slash + 1,
+                                      strlen(slash + 1)) >= 0;
+    }
+
+    extension = previous_component(relative, leaf);
+    if (extension == NULL) {
+        return 0;
+    }
+
+    return mapped_extension_index(image, extension,
+                                  (size_t)((leaf - 1) - extension)) >= 0;
+}
+
 static int build_backing_object_path(const HideousFS_Image *image,
                                      const char *name,
                                      char *dest, size_t dest_size)
@@ -852,6 +883,40 @@ static _kernel_oserror *write_file_info(const char *path, word loadaddr,
     return _kernel_swi(OS_File, &regs, &regs);
 }
 
+static _kernel_oserror *ensure_parent_directory(char *path)
+{
+    _kernel_swi_regs regs;
+    _kernel_oserror *error;
+    FS_cat_entry parent_entry;
+    char *last_dot = strrchr(path, '.');
+
+    if (last_dot == NULL) {
+        return NULL;
+    }
+
+    *last_dot = '\0';
+    error = read_file_info(path, &parent_entry);
+    if (error == NULL && parent_entry.type == object_directory) {
+        *last_dot = '.';
+        return NULL;
+    }
+    if (error == NULL && parent_entry.type != 0) {
+        *last_dot = '.';
+        return (_kernel_oserror *)&err_not_found;
+    }
+
+    regs.r[0] = fsfile_CreateDir;
+    regs.r[1] = (int)path;
+    regs.r[2] = 0;
+    regs.r[3] = 0;
+    regs.r[4] = 0;
+    regs.r[5] = 0;
+
+    error = _kernel_swi(OS_File, &regs, &regs);
+    *last_dot = '.';
+    return error;
+}
+
 static int build_writable_object_path(const HideousFS_Image *image,
                                       const char *name,
                                       char *dest, size_t dest_size)
@@ -1051,6 +1116,7 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
     int found;
     int open_mode = regs->r[0];
     int writable;
+    int projected_object;
 
     (void)private_word;
 
@@ -1109,6 +1175,7 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
         }
     }
 
+    projected_object = is_projected_object_name(image, (const char *)regs->r[1]);
     if (!build_backing_object_path(image, (const char *)regs->r[1],
                                    path_buffer, sizeof(path_buffer))) {
         return (_kernel_oserror *)&err_path_too_long;
@@ -1133,7 +1200,7 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
         }
     } else {
         error = read_file_info(path_buffer, &cat_entry);
-        if (error != NULL) {
+        if (error != NULL || cat_entry.type == 0) {
             cat_entry.type = object_file;
             cat_entry.loadaddr = 0;
             cat_entry.execaddr = 0;
@@ -1165,6 +1232,16 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
         }
         os_regs.r[1] = (int)path_buffer;
         error = _kernel_swi(OS_Find, &os_regs, &os_regs);
+        if (error != NULL && open_mode == fsopen_CreateUpdate &&
+            projected_object) {
+            _kernel_oserror *parent_error = ensure_parent_directory(path_buffer);
+
+            if (parent_error == NULL) {
+                os_regs.r[0] = OSFind_WriteFileNoPath;
+                os_regs.r[1] = (int)path_buffer;
+                error = _kernel_swi(OS_Find, &os_regs, &os_regs);
+            }
+        }
         if (error != NULL) {
             release_file_handle(file);
             return error;
@@ -1360,6 +1437,7 @@ _kernel_oserror *hideousfs_fsentry_file_handler(_kernel_swi_regs *regs, void *pr
     _kernel_oserror *error;
     char synthetic_extension[16];
     int found;
+    int projected_object;
 
     (void)private_word;
 
@@ -1374,6 +1452,8 @@ _kernel_oserror *hideousfs_fsentry_file_handler(_kernel_swi_regs *regs, void *pr
                                         path_buffer, sizeof(path_buffer))) {
             return (_kernel_oserror *)&err_not_found;
         }
+        projected_object = is_projected_object_name(image,
+                                                    (const char *)regs->r[1]);
 
         os_regs.r[0] = regs->r[0];
         os_regs.r[1] = (int)path_buffer;
@@ -1381,7 +1461,21 @@ _kernel_oserror *hideousfs_fsentry_file_handler(_kernel_swi_regs *regs, void *pr
         os_regs.r[3] = regs->r[3];
         os_regs.r[4] = regs->r[4];
         os_regs.r[5] = regs->r[5];
-        return _kernel_swi(OS_File, &os_regs, &os_regs);
+        error = _kernel_swi(OS_File, &os_regs, &os_regs);
+        if (error != NULL && projected_object) {
+            _kernel_oserror *parent_error = ensure_parent_directory(path_buffer);
+
+            if (parent_error == NULL) {
+                os_regs.r[0] = regs->r[0];
+                os_regs.r[1] = (int)path_buffer;
+                os_regs.r[2] = regs->r[2];
+                os_regs.r[3] = regs->r[3];
+                os_regs.r[4] = regs->r[4];
+                os_regs.r[5] = regs->r[5];
+                error = _kernel_swi(OS_File, &os_regs, &os_regs);
+            }
+        }
+        return error;
 
     case fsfile_CreateDir:
         if (!build_writable_directory_path(image, (const char *)regs->r[1],
@@ -1883,12 +1977,20 @@ static _kernel_oserror *rename_object(HideousFS_Image *image,
                                       const char *to_name)
 {
     _kernel_swi_regs os_regs;
+    _kernel_oserror *error;
 
     if (!build_writable_object_path(image, from_name,
                                     path_buffer, sizeof(path_buffer)) ||
         !build_writable_object_path(image, to_name,
                                     temp_buffer, sizeof(temp_buffer))) {
         return (_kernel_oserror *)&err_not_found;
+    }
+
+    if (is_projected_object_name(image, to_name)) {
+        error = ensure_parent_directory(temp_buffer);
+        if (error != NULL) {
+            return error;
+        }
     }
 
     os_regs.r[0] = FSControl_Rename;
