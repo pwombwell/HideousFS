@@ -72,20 +72,24 @@
 660 PROCwrite(beautiful$+".View.util/c","updated beautiful source"+CHR$13)
 670 PROCassert(FNfirstbyte(beautiful$+".c.util")=ASC("u"),"Beautiful overwrite updated backing file")
 680 PROCassert(FNextent(beautiful$+".View.util/c")=LEN("updated beautiful source"+CHR$13),"Beautiful overwrite reports expected extent")
-690 PROCwrite_gbpb(hideous$+".View.c.bulk","bulk hideous write"+CHR$13)
-700 PROCassert(FNexists(hideous$+".bulk/c"),"Hideous OS_GBPB write created backing bulk/c")
-710 PROCassert(FNfirstbyte(hideous$+".View.c.bulk")=ASC("b"),"Hideous OS_GBPB write content is readable")
-720 PROCassert(FNextent(hideous$+".View.c.bulk")=LEN("bulk hideous write"+CHR$13),"Hideous OS_GBPB write reports expected extent")
-730 PROCwrite_gbpb(beautiful$+".View.bulk/h","bulk beautiful write"+CHR$13)
-740 PROCassert(FNexists(beautiful$+".h.bulk"),"Beautiful OS_GBPB write created backing h.bulk")
-750 PROCassert(FNfirstbyte(beautiful$+".View.bulk/h")=ASC("b"),"Beautiful OS_GBPB write content is readable")
-760 PROCassert(FNexists(split$+".View.c.alpha"),"Split config maps first reverse directive")
-770 PROCassert(FNexists(split$+".View.cpp.beta"),"Split config maps longer reverse extension")
-780 PROCassert(FNexists(split$+".View.h.gamma"),"Split config maps second reverse directive")
-790 PROCassert(FNexists(split$+".View.s.delta")=0,"Split config does not map unlisted reverse extension")
-800 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
-810 PRINT "Test tree left at: ";root$
-820 END
+690 PROCwrite(hideous$+".View.h.defs","h"+CHR$13)
+700 PROCassert(FNextent(hideous$+".View.h.defs")=LEN("h"+CHR$13),"Hideous shorter overwrite truncates extent")
+710 PROCwrite(beautiful$+".View.util/c","c"+CHR$13)
+720 PROCassert(FNextent(beautiful$+".View.util/c")=LEN("c"+CHR$13),"Beautiful shorter overwrite truncates extent")
+730 PROCwrite_gbpb(hideous$+".View.c.bulk","bulk hideous write"+CHR$13)
+740 PROCassert(FNexists(hideous$+".bulk/c"),"Hideous OS_GBPB write created backing bulk/c")
+750 PROCassert(FNfirstbyte(hideous$+".View.c.bulk")=ASC("b"),"Hideous OS_GBPB write content is readable")
+760 PROCassert(FNextent(hideous$+".View.c.bulk")=LEN("bulk hideous write"+CHR$13),"Hideous OS_GBPB write reports expected extent")
+770 PROCwrite_gbpb(beautiful$+".View.bulk/h","bulk beautiful write"+CHR$13)
+780 PROCassert(FNexists(beautiful$+".h.bulk"),"Beautiful OS_GBPB write created backing h.bulk")
+790 PROCassert(FNfirstbyte(beautiful$+".View.bulk/h")=ASC("b"),"Beautiful OS_GBPB write content is readable")
+800 PROCassert(FNexists(split$+".View.c.alpha"),"Split config maps first reverse directive")
+810 PROCassert(FNexists(split$+".View.cpp.beta"),"Split config maps longer reverse extension")
+820 PROCassert(FNexists(split$+".View.h.gamma"),"Split config maps second reverse directive")
+830 PROCassert(FNexists(split$+".View.s.delta")=0,"Split config does not map unlisted reverse extension")
+840 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
+850 PRINT "Test tree left at: ";root$
+860 END
 1000 DEF PROCsetup_hideous(d$)
 1010 PROCmkdir(d$)
 1020 PROCwrite_config(d$+".View","hideous")

@@ -26,7 +26,8 @@ The current assertions check:
 - Beautiful mode can save `header/h` through the image view and create backing
   path `h.header`.
 - Existing projected files in both modes can be overwritten through the image
-  view, update the expected backing object, and report the new extent.
+  view, update the expected backing object, and report the new extent,
+  including when the replacement is shorter than the original file.
 - Hideous mode can rename `c.main` to `c.renamed` and move backing
   `main/c` to `renamed/c`.
 - Beautiful mode can rename `main/c` to `renamed/c` and move backing
