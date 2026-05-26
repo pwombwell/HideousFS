@@ -12,7 +12,7 @@ A HideousFS image file is a small configuration file placed inside the directory
 The example name is usually:
 
 ```text
-Hideous
+View
 ```
 
 but the leafname is arbitrary. HideousFS should identify the image by filetype, not by name.
@@ -24,12 +24,6 @@ During development the image filetype is:
 ```
 
 This is a temporary user-area filetype and may clash with existing uses such as music files.
-
-The development filing system number is:
-
-```text
-666
-```
 
 ## Hideous mode
 
@@ -94,7 +88,7 @@ reverse o   .o
 reverse a   .a
 reverse cpp .cpp
 reverse c++ .c++
-ignore Hideous
+ignore View
 ignore .git
 ```
 
@@ -111,7 +105,7 @@ reverse o   .o
 reverse a   .a
 reverse cpp .cpp
 reverse c++ .c++
-ignore Hideous
+ignore View
 ignore .git
 ```
 

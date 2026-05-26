@@ -27,10 +27,8 @@ image through RISC OS should show a transformed view of the containing
 directory. The image file itself contains configuration, not the file data.
 
 Until an official filetype is allocated, use filetype `&001` from the user area.
-This intentionally risks clashing with existing uses such as music files and
+This intentionally risks clashing with existing uses such as soundtracker files and
 should be treated as temporary.
-
-Use filing system number `666` for development.
 
 Example backing directory:
 
@@ -434,4 +432,4 @@ to ensure the correct file was modified.
 Keep this file as the developer/implementation specification. Add a separate
 `README.md` for user-facing documentation: what HideousFS does, how to create a
 config image file, how Hideous and Beautiful modes behave, and the current
-temporary nature of filetype `&001` and filing system number `666`.
+temporary nature of filetype `&001`.
