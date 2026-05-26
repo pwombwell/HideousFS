@@ -35,6 +35,8 @@ The current assertions check:
   filetype.
 - Two image files in the same backing directory can use different `reverse`
   lists, and each view only maps the extension configured by that image.
+- Projected files inside a real subdirectory are readable and new projected
+  saves inside that subdirectory create the expected backing paths.
 
 The program leaves the generated test tree in place so it can be inspected
 after a failure.

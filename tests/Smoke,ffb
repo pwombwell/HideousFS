@@ -45,16 +45,25 @@
 430 PROCassert(FNexists(multi$+".CView.h.onlyh")=0,"CView does not map h-only backing file")
 440 PROCassert(FNexists(multi$+".HView.h.onlyh"),"HView maps h-only backing file")
 450 PROCassert(FNexists(multi$+".HView.c.onlyc")=0,"HView does not map c-only backing file")
-460 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
-470 PRINT "Test tree left at: ";root$
-480 END
+460 PROCassert(FNexists(hideous$+".View.src.c.submain"),"Hideous subdirectory projected file exists")
+470 PROCwrite(hideous$+".View.src.c.newsub","hideous subdir save"+CHR$13)
+480 PROCassert(FNexists(hideous$+".src.newsub/c"),"Hideous subdirectory save created backing src.newsub/c")
+490 PROCassert(FNexists(beautiful$+".View.src.submain/c"),"Beautiful subdirectory projected file exists")
+500 PROCwrite(beautiful$+".View.src.subnew/h","beautiful subdir save"+CHR$13)
+510 PROCassert(FNexists(beautiful$+".src.h.subnew"),"Beautiful subdirectory save created backing src.h.subnew")
+520 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
+530 PRINT "Test tree left at: ";root$
+540 END
 1000 DEF PROCsetup_hideous(d$)
 1010 PROCmkdir(d$)
 1020 PROCwrite_config(d$+".View","hideous")
 1030 PROCwrite(d$+".main/c","int main(void)"+CHR$13)
 1040 PROCwrite(d$+".defs/h","#define VALUE 1"+CHR$13)
 1050 PROCwrite(d$+".Readme","Hideous backing tree"+CHR$13)
-1060 ENDPROC
+1060 PROCmkdir(d$+".src")
+1070 PROCmkdir(d$+".src.submain")
+1080 PROCwrite(d$+".src.submain/c","int submain(void)"+CHR$13)
+1090 ENDPROC
 1100 DEF PROCsetup_beautiful(d$)
 1110 PROCmkdir(d$)
 1120 PROCwrite_config(d$+".View","beautiful")
@@ -62,65 +71,68 @@
 1140 PROCwrite(d$+".c.main","int main(void)"+CHR$13)
 1150 PROCwrite(d$+".c.util","void util(void)"+CHR$13)
 1160 PROCwrite(d$+".Readme","Beautiful backing tree"+CHR$13)
-1170 ENDPROC
-1200 DEF PROCsetup_multi(d$)
-1210 PROCmkdir(d$)
-1220 PROCwrite_config_ext(d$+".CView","hideous","c")
-1230 PROCwrite_config_ext(d$+".HView","hideous","h")
-1240 PROCmkdir(d$+".onlyc")
-1250 PROCmkdir(d$+".onlyh")
-1260 PROCwrite(d$+".onlyc/c","c-only"+CHR$13)
-1270 PROCwrite(d$+".onlyh/h","h-only"+CHR$13)
-1280 ENDPROC
-1300 DEF PROCwrite_config(file$,mode$)
-1310 PROCwrite_config_ext(file$,mode$,"c h s o a cpp c++")
-1320 ENDPROC
-1400 DEF PROCwrite_config_ext(file$,mode$,reverse$)
-1410 text$="# HideousFS"+CHR$13+"mode "+mode$+CHR$13+"reverse "+reverse$+CHR$13
-1420 PROCwrite(file$,text$)
-1430 SYS "OS_File",18,file$,&001
-1440 ENDPROC
-1500 DEF PROCmkdir(d$)
-1510 LOCAL obj%
-1520 SYS "OS_File",5,d$ TO obj%
-1530 IF obj%=2 THEN ENDPROC
-1540 IF obj%<>0 THEN PRINT "Not a directory: ";d$:errors%=errors%+1:ENDPROC
-1550 SYS "OS_File",8,d$
-1560 ENDPROC
-1600 DEF PROCwrite(file$,text$)
-1610 LOCAL ch%,i%
-1620 ch%=OPENOUT(file$)
-1630 FOR i%=1 TO LEN(text$)
-1640 BPUT#ch%,ASC(MID$(text$,i%,1))
-1650 NEXT
-1660 CLOSE#ch%
-1670 ENDPROC
-1700 DEF PROCassert(ok%,msg$)
-1710 IF ok% THEN PRINT "PASS: ";msg$ ELSE PRINT "FAIL: ";msg$:errors%=errors%+1
-1720 ENDPROC
-1800 DEF PROCrename(from$,to$)
-1810 OSCLI "Rename "+from$+" "+to$
+1170 PROCmkdir(d$+".src")
+1180 PROCmkdir(d$+".src.c")
+1190 PROCwrite(d$+".src.c.submain","int submain(void)"+CHR$13)
+1200 ENDPROC
+1300 DEF PROCsetup_multi(d$)
+1310 PROCmkdir(d$)
+1320 PROCwrite_config_ext(d$+".CView","hideous","c")
+1330 PROCwrite_config_ext(d$+".HView","hideous","h")
+1340 PROCmkdir(d$+".onlyc")
+1350 PROCmkdir(d$+".onlyh")
+1360 PROCwrite(d$+".onlyc/c","c-only"+CHR$13)
+1370 PROCwrite(d$+".onlyh/h","h-only"+CHR$13)
+1380 ENDPROC
+1400 DEF PROCwrite_config(file$,mode$)
+1410 PROCwrite_config_ext(file$,mode$,"c h s o a cpp c++")
+1420 ENDPROC
+1500 DEF PROCwrite_config_ext(file$,mode$,reverse$)
+1510 text$="# HideousFS"+CHR$13+"mode "+mode$+CHR$13+"reverse "+reverse$+CHR$13
+1520 PROCwrite(file$,text$)
+1530 SYS "OS_File",18,file$,&001
+1540 ENDPROC
+1600 DEF PROCmkdir(d$)
+1610 LOCAL obj%
+1620 SYS "OS_File",5,d$ TO obj%
+1630 IF obj%=2 THEN ENDPROC
+1640 IF obj%<>0 THEN PRINT "Not a directory: ";d$:errors%=errors%+1:ENDPROC
+1650 SYS "OS_File",8,d$
+1660 ENDPROC
+1700 DEF PROCwrite(file$,text$)
+1710 LOCAL ch%,i%
+1720 ch%=OPENOUT(file$)
+1730 FOR i%=1 TO LEN(text$)
+1740 BPUT#ch%,ASC(MID$(text$,i%,1))
+1750 NEXT
+1760 CLOSE#ch%
+1770 ENDPROC
+1800 DEF PROCassert(ok%,msg$)
+1810 IF ok% THEN PRINT "PASS: ";msg$ ELSE PRINT "FAIL: ";msg$:errors%=errors%+1
 1820 ENDPROC
-1900 DEF PROCdelete(file$)
-1910 SYS "OS_File",6,file$
+1900 DEF PROCrename(from$,to$)
+1910 OSCLI "Rename "+from$+" "+to$
 1920 ENDPROC
-2000 DEF PROCsettype(file$,type%)
-2010 SYS "OS_File",18,file$,type%
+2000 DEF PROCdelete(file$)
+2010 SYS "OS_File",6,file$
 2020 ENDPROC
-2100 DEF FNexists(file$)
-2110 LOCAL obj%
-2120 SYS "OS_File",5,file$ TO obj%
-2130 =obj%<>0
-2200 DEF FNisdir(file$)
+2100 DEF PROCsettype(file$,type%)
+2110 SYS "OS_File",18,file$,type%
+2120 ENDPROC
+2200 DEF FNexists(file$)
 2210 LOCAL obj%
 2220 SYS "OS_File",5,file$ TO obj%
-2230 =obj%=2
-2300 DEF FNfiletype(file$)
-2310 LOCAL obj%,type%
+2230 =obj%<>0
+2300 DEF FNisdir(file$)
+2310 LOCAL obj%
 2320 SYS "OS_File",5,file$ TO obj%
-2330 IF obj%=0 THEN =-1
-2340 SYS "OS_File",23,file$ TO,,,,,,type%
-2350 =type%
+2330 =obj%=2
+2400 DEF FNfiletype(file$)
+2410 LOCAL obj%,type%
+2420 SYS "OS_File",5,file$ TO obj%
+2430 IF obj%=0 THEN =-1
+2440 SYS "OS_File",23,file$ TO,,,,,,type%
+2450 =type%
 9000 DEF PROCerror
 9010 PRINT '"ERROR: ";REPORT$;" at line ";ERL
 9020 PRINT "Test tree left at: ";root$
