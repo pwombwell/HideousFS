@@ -34,6 +34,7 @@ enum {
 
     FSControl_RegisterImageFS = 0x23,
     FSControl_DeregisterImageFS = 0x24,
+    FSControl_Rename = 0x19,
 
     fsfile_Save = 0,
     fsfile_WriteInfo = 1,
@@ -61,6 +62,7 @@ enum {
 
     fsfunc_ReadDirEntries = 14,
     fsfunc_ReadDirEntriesInfo = 15,
+    fsfunc_Rename = 8,
     fsfunc_NewImage = 21,
     fsfunc_ImageClosing = 22,
     fsfunc_ReadBootOption = 27,
@@ -591,6 +593,40 @@ static int build_writable_object_path(const HideousFS_Image *image,
     return build_backing_object_path(image, name, dest, dest_size);
 }
 
+static int path_has_mapped_component(const char *name)
+{
+    const char *component = skip_root_prefix(name);
+
+    while (component != NULL && component[0] != '\0') {
+        const char *dot = strchr(component, '.');
+        size_t len = dot == NULL ? strlen(component) : (size_t)(dot - component);
+
+        if (mapped_extension_index(component, len) >= 0) {
+            return 1;
+        }
+
+        component = dot == NULL ? NULL : dot + 1;
+    }
+
+    return 0;
+}
+
+static int build_writable_directory_path(const HideousFS_Image *image,
+                                         const char *name,
+                                         char *dest, size_t dest_size)
+{
+    if (is_active_image_path(image, name) || path_has_mapped_component(name)) {
+        return 0;
+    }
+
+    if (is_root_name(name)) {
+        return 0;
+    }
+
+    return append_relative_to_backing(image, skip_root_prefix(name),
+                                      dest, dest_size);
+}
+
 static _kernel_oserror *set_file_extent(HideousFS_File *file, word extent)
 {
     _kernel_swi_regs regs;
@@ -1071,6 +1107,20 @@ _kernel_oserror *hideousfs_fsentry_file_handler(_kernel_swi_regs *regs, void *pr
         os_regs.r[5] = regs->r[5];
         return _kernel_swi(OS_File, &os_regs, &os_regs);
 
+    case fsfile_CreateDir:
+        if (!build_writable_directory_path(image, (const char *)regs->r[1],
+                                           path_buffer, sizeof(path_buffer))) {
+            return (_kernel_oserror *)&err_not_found;
+        }
+
+        os_regs.r[0] = regs->r[0];
+        os_regs.r[1] = (int)path_buffer;
+        os_regs.r[2] = regs->r[2];
+        os_regs.r[3] = regs->r[3];
+        os_regs.r[4] = regs->r[4];
+        os_regs.r[5] = regs->r[5];
+        return _kernel_swi(OS_File, &os_regs, &os_regs);
+
     case fsfile_WriteInfo:
     case fsfile_WriteLoad:
     case fsfile_WriteExec:
@@ -1336,6 +1386,26 @@ static _kernel_oserror *read_dir(_kernel_swi_regs *regs, int with_info)
     return NULL;
 }
 
+static _kernel_oserror *rename_object(HideousFS_Image *image,
+                                      const char *from_name,
+                                      const char *to_name)
+{
+    _kernel_swi_regs os_regs;
+
+    if (!build_writable_object_path(image, from_name,
+                                    path_buffer, sizeof(path_buffer)) ||
+        !build_writable_object_path(image, to_name,
+                                    temp_buffer, sizeof(temp_buffer))) {
+        return (_kernel_oserror *)&err_not_found;
+    }
+
+    os_regs.r[0] = FSControl_Rename;
+    os_regs.r[1] = (int)path_buffer;
+    os_regs.r[2] = (int)temp_buffer;
+
+    return _kernel_swi(OS_FSControl, &os_regs, &os_regs);
+}
+
 _kernel_oserror *hideousfs_fsentry_func_handler(_kernel_swi_regs *regs, void *private_word)
 {
     HideousFS_Image *image;
@@ -1344,6 +1414,20 @@ _kernel_oserror *hideousfs_fsentry_func_handler(_kernel_swi_regs *regs, void *pr
     (void)private_word;
 
     switch (regs->r[0]) {
+    case fsfunc_Rename:
+        image = (HideousFS_Image *)regs->r[6];
+        if (image == NULL || !image->in_use || regs->r[1] == 0 || regs->r[2] == 0) {
+            return (_kernel_oserror *)&err_not_found;
+        }
+
+        error = rename_object(image, (const char *)regs->r[1],
+                              (const char *)regs->r[2]);
+        if (error != NULL) {
+            return error;
+        }
+        regs->r[1] = 0;
+        return NULL;
+
     case fsfunc_ReadDirEntries:
         return read_dir(regs, 0);
 
