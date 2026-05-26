@@ -8,9 +8,11 @@
 80 hideous$=root$+".Hideous"
 90 beautiful$=root$+".Beautiful"
 95 multi$=root$+".Multi"
+96 collide$=root$+".Collision"
 100 PROCsetup_hideous(hideous$)
 110 PROCsetup_beautiful(beautiful$)
 115 PROCsetup_multi(multi$)
+116 PROCsetup_collision(collide$)
 120 PRINT '"Catalogue: Hideous image view"
 130 OSCLI "Cat "+hideous$+".View"
 140 PRINT '"Catalogue: Beautiful image view"
@@ -51,9 +53,11 @@
 490 PROCassert(FNexists(beautiful$+".View.src.submain/c"),"Beautiful subdirectory projected file exists")
 500 PROCwrite(beautiful$+".View.src.subnew/h","beautiful subdir save"+CHR$13)
 510 PROCassert(FNexists(beautiful$+".src.h.subnew"),"Beautiful subdirectory save created backing src.h.subnew")
-520 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
-530 PRINT "Test tree left at: ";root$
-540 END
+520 PROCassert(FNfirstbyte(collide$+".Hideous.View.c.collision")=ASC("P"),"Hideous collision reads projected backing file")
+530 PROCassert(FNfirstbyte(collide$+".Beautiful.View.collision/c")=ASC("P"),"Beautiful collision reads projected backing file")
+540 IF errors%=0 THEN PRINT '"PASS: all smoke tests passed" ELSE PRINT '"FAIL: ";errors%;" smoke tests failed"
+550 PRINT "Test tree left at: ";root$
+560 END
 1000 DEF PROCsetup_hideous(d$)
 1010 PROCmkdir(d$)
 1020 PROCwrite_config(d$+".View","hideous")
@@ -84,55 +88,75 @@
 1360 PROCwrite(d$+".onlyc/c","c-only"+CHR$13)
 1370 PROCwrite(d$+".onlyh/h","h-only"+CHR$13)
 1380 ENDPROC
-1400 DEF PROCwrite_config(file$,mode$)
-1410 PROCwrite_config_ext(file$,mode$,"c h s o a cpp c++")
-1420 ENDPROC
-1500 DEF PROCwrite_config_ext(file$,mode$,reverse$)
-1510 text$="# HideousFS"+CHR$13+"mode "+mode$+CHR$13+"reverse "+reverse$+CHR$13
-1520 PROCwrite(file$,text$)
-1530 SYS "OS_File",18,file$,&001
-1540 ENDPROC
-1600 DEF PROCmkdir(d$)
-1610 LOCAL obj%
-1620 SYS "OS_File",5,d$ TO obj%
-1630 IF obj%=2 THEN ENDPROC
-1640 IF obj%<>0 THEN PRINT "Not a directory: ";d$:errors%=errors%+1:ENDPROC
-1650 SYS "OS_File",8,d$
-1660 ENDPROC
-1700 DEF PROCwrite(file$,text$)
-1710 LOCAL ch%,i%
-1720 ch%=OPENOUT(file$)
-1730 FOR i%=1 TO LEN(text$)
-1740 BPUT#ch%,ASC(MID$(text$,i%,1))
-1750 NEXT
-1760 CLOSE#ch%
-1770 ENDPROC
-1800 DEF PROCassert(ok%,msg$)
-1810 IF ok% THEN PRINT "PASS: ";msg$ ELSE PRINT "FAIL: ";msg$:errors%=errors%+1
-1820 ENDPROC
-1900 DEF PROCrename(from$,to$)
-1910 OSCLI "Rename "+from$+" "+to$
-1920 ENDPROC
-2000 DEF PROCdelete(file$)
-2010 SYS "OS_File",6,file$
+1400 DEF PROCsetup_collision(d$)
+1410 PROCmkdir(d$)
+1420 PROCmkdir(d$+".Hideous")
+1430 PROCwrite_config_ext(d$+".Hideous.View","hideous","c")
+1440 PROCwrite(d$+".Hideous.collision/c","Projected hideous collision"+CHR$13)
+1450 PROCmkdir(d$+".Hideous.c")
+1460 PROCwrite(d$+".Hideous.c.collision","Raw hideous collision"+CHR$13)
+1470 PROCmkdir(d$+".Beautiful")
+1480 PROCwrite_config_ext(d$+".Beautiful.View","beautiful","c")
+1490 PROCmkdir(d$+".Beautiful.c")
+1500 PROCwrite(d$+".Beautiful.c.collision","Projected beautiful collision"+CHR$13)
+1510 PROCwrite(d$+".Beautiful.collision/c","Raw beautiful collision"+CHR$13)
+1520 ENDPROC
+1600 DEF PROCwrite_config(file$,mode$)
+1610 PROCwrite_config_ext(file$,mode$,"c h s o a cpp c++")
+1620 ENDPROC
+1700 DEF PROCwrite_config_ext(file$,mode$,reverse$)
+1710 text$="# HideousFS"+CHR$13+"mode "+mode$+CHR$13+"reverse "+reverse$+CHR$13
+1720 PROCwrite(file$,text$)
+1730 SYS "OS_File",18,file$,&001
+1740 ENDPROC
+1800 DEF PROCmkdir(d$)
+1810 LOCAL obj%
+1820 SYS "OS_File",5,d$ TO obj%
+1830 IF obj%=2 THEN ENDPROC
+1840 IF obj%<>0 THEN PRINT "Not a directory: ";d$:errors%=errors%+1:ENDPROC
+1850 SYS "OS_File",8,d$
+1860 ENDPROC
+1900 DEF PROCwrite(file$,text$)
+1910 LOCAL ch%,i%
+1920 ch%=OPENOUT(file$)
+1930 FOR i%=1 TO LEN(text$)
+1940 BPUT#ch%,ASC(MID$(text$,i%,1))
+1950 NEXT
+1960 CLOSE#ch%
+1970 ENDPROC
+2000 DEF PROCassert(ok%,msg$)
+2010 IF ok% THEN PRINT "PASS: ";msg$ ELSE PRINT "FAIL: ";msg$:errors%=errors%+1
 2020 ENDPROC
-2100 DEF PROCsettype(file$,type%)
-2110 SYS "OS_File",18,file$,type%
+2100 DEF PROCrename(from$,to$)
+2110 OSCLI "Rename "+from$+" "+to$
 2120 ENDPROC
-2200 DEF FNexists(file$)
-2210 LOCAL obj%
-2220 SYS "OS_File",5,file$ TO obj%
-2230 =obj%<>0
-2300 DEF FNisdir(file$)
-2310 LOCAL obj%
-2320 SYS "OS_File",5,file$ TO obj%
-2330 =obj%=2
-2400 DEF FNfiletype(file$)
-2410 LOCAL obj%,type%
+2200 DEF PROCdelete(file$)
+2210 SYS "OS_File",6,file$
+2220 ENDPROC
+2300 DEF PROCsettype(file$,type%)
+2310 SYS "OS_File",18,file$,type%
+2320 ENDPROC
+2400 DEF FNexists(file$)
+2410 LOCAL obj%
 2420 SYS "OS_File",5,file$ TO obj%
-2430 IF obj%=0 THEN =-1
-2440 SYS "OS_File",23,file$ TO,,,,,,type%
-2450 =type%
+2430 =obj%<>0
+2500 DEF FNisdir(file$)
+2510 LOCAL obj%
+2520 SYS "OS_File",5,file$ TO obj%
+2530 =obj%=2
+2600 DEF FNfiletype(file$)
+2610 LOCAL obj%,type%
+2620 SYS "OS_File",5,file$ TO obj%
+2630 IF obj%=0 THEN =-1
+2640 SYS "OS_File",23,file$ TO,,,,,,type%
+2650 =type%
+2700 DEF FNfirstbyte(file$)
+2710 LOCAL ch%,byte%
+2720 ch%=OPENIN(file$)
+2730 IF ch%=0 THEN =-1
+2740 byte%=BGET#ch%
+2750 CLOSE#ch%
+2760 =byte%
 9000 DEF PROCerror
 9010 PRINT '"ERROR: ";REPORT$;" at line ";ERL
 9020 PRINT "Test tree left at: ";root$

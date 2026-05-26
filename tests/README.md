@@ -37,6 +37,8 @@ The current assertions check:
   lists, and each view only maps the extension configured by that image.
 - Projected files inside a real subdirectory are readable and new projected
   saves inside that subdirectory create the expected backing paths.
+- Hideous and Beautiful collision cases read the projected backing object when
+  a raw backing object could otherwise appear at the same image path.
 
 The program leaves the generated test tree in place so it can be inspected
 after a failure.

@@ -7,7 +7,7 @@ initialisation-code: hideousfs_initialise
 finalisation-code: hideousfs_finalise
 
 generic-veneers: hideousfs_fsentry_open,
-                 hideousfs_fsentry_getbytes,
+                 hideousfs_fsentry_getbytes(carry-capable:),
                  hideousfs_fsentry_putbytes,
                  hideousfs_fsentry_args,
                  hideousfs_fsentry_close,

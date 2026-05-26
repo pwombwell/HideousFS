@@ -12,9 +12,9 @@ enum {
 
     OS_File = 0x08,
     OS_Args = 0x09,
+    OS_BPut = 0x0b,
     OS_GBPB = 0x0c,
     OS_Find = 0x0d,
-    OS_BPut = 0x0b,
     OS_FSControl = 0x29,
 
     OSFind_Close = 0,
@@ -56,7 +56,7 @@ enum {
     fsargs_SetPTR = 1,
     fsargs_SetEXT = 3,
     fsargs_ReadEXT = 2,
-    fsargs_ReadSize = 4,
+    fsargs_ReadAllocation = 4,
     fsargs_Flush = 6,
     fsargs_EnsureSize = 7,
     fsargs_ReadLoadExec = 9,
@@ -84,8 +84,8 @@ enum {
     TempBufferSize = 1024,
     MaxReverseExtensions = 16,
     MaxExtensionLen = 16,
-    MaxImages = 8,
-    MaxOpenFiles = 8
+    MaxImages = 16,
+    MaxOpenFiles = 32
 };
 
 #define fsopen_WritePermission ((word)1u << 31)
@@ -230,6 +230,11 @@ static _kernel_oserror *operation_not_implemented(const char *entry, int op)
 static word word_align(word value)
 {
     return (value + 3u) & ~3u;
+}
+
+static word round_up_to_multiple(word value, word multiple)
+{
+    return multiple == 0 ? value : ((value + multiple - 1) / multiple) * multiple;
 }
 
 static int default_reverse_extension_count(void)
@@ -1000,6 +1005,58 @@ static _kernel_oserror *ensure_file_size(HideousFS_File *file, word size)
     return error;
 }
 
+static _kernel_oserror *read_open_file_at(word os_handle, void *dest,
+                                          word requested, word start_offset,
+                                          word *unread)
+{
+    _kernel_swi_regs regs;
+    _kernel_oserror *error;
+
+    regs.r[0] = OSGBPB_ReadAt;
+    regs.r[1] = (int)os_handle;
+    regs.r[2] = (int)dest;
+    regs.r[3] = (int)requested;
+    regs.r[4] = (int)start_offset;
+
+    error = _kernel_swi(OS_GBPB, &regs, &regs);
+    if (error == NULL) {
+        *unread = (word)regs.r[3];
+    }
+    return error;
+}
+
+static _kernel_oserror *read_file_at(const HideousFS_File *file, void *dest,
+                                     word requested, word start_offset,
+                                     word *unread)
+{
+    _kernel_swi_regs regs;
+    _kernel_oserror *error;
+
+    if (file->os_handle != 0) {
+        return read_open_file_at(file->os_handle, dest, requested,
+                                 start_offset, unread);
+    }
+
+    regs.r[0] = OSFind_ReadFileNoPath;
+    regs.r[1] = (int)file->backing_path;
+    error = _kernel_swi(OS_Find, &regs, &regs);
+    if (error != NULL) {
+        return error;
+    }
+
+    error = read_open_file_at((word)regs.r[0], dest, requested, start_offset,
+                              unread);
+
+    regs.r[1] = regs.r[0];
+    regs.r[0] = OSFind_Close;
+    if (error == NULL) {
+        error = _kernel_swi(OS_Find, &regs, &regs);
+    } else {
+        (void)_kernel_swi(OS_Find, &regs, &regs);
+    }
+    return error;
+}
+
 static _kernel_oserror *read_image_path(HideousFS_Image *image)
 {
     _kernel_swi_regs regs;
@@ -1224,30 +1281,32 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
     }
 
     if (cat_entry.type == object_file) {
-        if (open_mode == fsopen_CreateUpdate) {
+        if (open_mode == fsopen_ReadOnly) {
+            file->os_handle = 0;
+        } else if (open_mode == fsopen_CreateUpdate) {
             os_regs.r[0] = OSFind_WriteFileNoPath;
         } else if (open_mode == fsopen_Update) {
             os_regs.r[0] = OSFind_UpdateFileNoPath;
-        } else {
-            os_regs.r[0] = OSFind_ReadFileNoPath;
         }
-        os_regs.r[1] = (int)path_buffer;
-        error = _kernel_swi(OS_Find, &os_regs, &os_regs);
-        if (error != NULL && open_mode == fsopen_CreateUpdate &&
-            projected_object) {
-            _kernel_oserror *parent_error = ensure_parent_directory(path_buffer);
+        if (open_mode != fsopen_ReadOnly) {
+            os_regs.r[1] = (int)path_buffer;
+            error = _kernel_swi(OS_Find, &os_regs, &os_regs);
+            if (error != NULL && open_mode == fsopen_CreateUpdate &&
+                projected_object) {
+                _kernel_oserror *parent_error = ensure_parent_directory(path_buffer);
 
-            if (parent_error == NULL) {
-                os_regs.r[0] = OSFind_WriteFileNoPath;
-                os_regs.r[1] = (int)path_buffer;
-                error = _kernel_swi(OS_Find, &os_regs, &os_regs);
+                if (parent_error == NULL) {
+                    os_regs.r[0] = OSFind_WriteFileNoPath;
+                    os_regs.r[1] = (int)path_buffer;
+                    error = _kernel_swi(OS_Find, &os_regs, &os_regs);
+                }
             }
+            if (error != NULL) {
+                release_file_handle(file);
+                return error;
+            }
+            file->os_handle = (word)os_regs.r[0];
         }
-        if (error != NULL) {
-            release_file_handle(file);
-            return error;
-        }
-        file->os_handle = (word)os_regs.r[0];
     } else {
         file->os_handle = 0;
     }
@@ -1273,9 +1332,9 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
                              (file->writable ? fsopen_WritePermission : 0) |
                              (file->is_directory ? fsopen_IsDirectory : 0);
     open_block.inhand = file;
-    open_block.buffsize = 0;
+    open_block.buffsize = file->is_directory ? 0 : TempBufferSize;
     open_block.fileext = file->extent;
-    open_block.falloc = file->extent;
+    open_block.falloc = round_up_to_multiple(file->extent, open_block.buffsize);
 
     regs->r[0] = (int)open_block.information;
     regs->r[1] = (int)open_block.inhand;
@@ -1288,8 +1347,10 @@ _kernel_oserror *hideousfs_fsentry_open_handler(_kernel_swi_regs *regs, void *pr
 _kernel_oserror *hideousfs_fsentry_getbytes_handler(_kernel_swi_regs *regs, void *private_word)
 {
     HideousFS_File *file = (HideousFS_File *)regs->r[1];
-    _kernel_swi_regs os_regs;
     _kernel_oserror *error;
+    word start_offset;
+    word requested;
+    word unread;
 
     (void)private_word;
 
@@ -1297,15 +1358,26 @@ _kernel_oserror *hideousfs_fsentry_getbytes_handler(_kernel_swi_regs *regs, void
         return (_kernel_oserror *)&err_not_found;
     }
 
-    os_regs.r[0] = OSGBPB_ReadAt;
-    os_regs.r[1] = (int)file->os_handle;
-    os_regs.r[2] = regs->r[2];
-    os_regs.r[3] = regs->r[3];
-    os_regs.r[4] = regs->r[4];
+    if (regs->r[2] == -1) {
+        start_offset = file->ptr;
+        error = read_file_at(file, temp_buffer, 1, start_offset, &unread);
+        if (error == NULL) {
+            if (unread == 0) {
+                regs->r[0] = (unsigned char)temp_buffer[0];
+            } else {
+                return VENEER_SETCARRY;
+            }
+            file->ptr = start_offset + 1 - unread;
+        }
+        return error;
+    }
 
-    error = _kernel_swi(OS_GBPB, &os_regs, &os_regs);
+    start_offset = regs->r[4] == -1 ? file->ptr : (word)regs->r[4];
+    requested = (word)regs->r[3];
+    error = read_file_at(file, (void *)regs->r[2], requested, start_offset,
+                         &unread);
     if (error == NULL) {
-        file->ptr = (word)regs->r[4] + (word)regs->r[3];
+        file->ptr = start_offset + requested - unread;
     }
     return error;
 }
@@ -1315,6 +1387,9 @@ _kernel_oserror *hideousfs_fsentry_putbytes_handler(_kernel_swi_regs *regs, void
     HideousFS_File *file = (HideousFS_File *)regs->r[1];
     _kernel_swi_regs os_regs;
     _kernel_oserror *error;
+    word start_offset;
+    word requested;
+    word unwritten;
     word end_offset;
 
     (void)private_word;
@@ -1324,25 +1399,42 @@ _kernel_oserror *hideousfs_fsentry_putbytes_handler(_kernel_swi_regs *regs, void
     }
 
     if (regs->r[2] == -1) {
+        start_offset = file->ptr;
+        os_regs.r[0] = fsargs_SetPTR;
+        os_regs.r[1] = (int)file->os_handle;
+        os_regs.r[2] = (int)start_offset;
+
+        error = _kernel_swi(OS_Args, &os_regs, &os_regs);
+        if (error != NULL) {
+            return error;
+        }
+
         os_regs.r[0] = regs->r[0] & 0xff;
         os_regs.r[1] = (int)file->os_handle;
+
         error = _kernel_swi(OS_BPut, &os_regs, &os_regs);
         if (error == NULL) {
-            file->extent++;
-            file->ptr++;
+            end_offset = start_offset + 1;
+            if (end_offset > file->extent) {
+                file->extent = end_offset;
+            }
+            file->ptr = end_offset;
         }
         return error;
     }
 
+    start_offset = regs->r[4] == -1 ? file->ptr : (word)regs->r[4];
+    requested = (word)regs->r[3];
     os_regs.r[0] = OSGBPB_WriteAt;
     os_regs.r[1] = (int)file->os_handle;
     os_regs.r[2] = regs->r[2];
     os_regs.r[3] = regs->r[3];
-    os_regs.r[4] = regs->r[4];
+    os_regs.r[4] = (int)start_offset;
 
     error = _kernel_swi(OS_GBPB, &os_regs, &os_regs);
     if (error == NULL) {
-        end_offset = (word)regs->r[4] + (word)regs->r[3];
+        unwritten = (word)os_regs.r[3];
+        end_offset = start_offset + requested - unwritten;
         if (end_offset > file->extent) {
             file->extent = end_offset;
         }
@@ -1377,8 +1469,11 @@ _kernel_oserror *hideousfs_fsentry_args_handler(_kernel_swi_regs *regs, void *pr
         return set_file_extent(file, (word)regs->r[2]);
 
     case fsargs_ReadEXT:
-    case fsargs_ReadSize:
         regs->r[2] = (int)file->extent;
+        return NULL;
+
+    case fsargs_ReadAllocation:
+        regs->r[2] = (int)round_up_to_multiple(file->extent, TempBufferSize);
         return NULL;
 
     case fsargs_Flush:
@@ -1412,7 +1507,7 @@ _kernel_oserror *hideousfs_fsentry_close_handler(_kernel_swi_regs *regs, void *p
         return (_kernel_oserror *)&err_not_found;
     }
 
-    if (file->is_directory) {
+    if (file->is_directory || file->os_handle == 0) {
         error = NULL;
     } else {
         os_regs.r[0] = OSFind_Close;
