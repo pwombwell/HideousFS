@@ -33,6 +33,8 @@ The current assertions check:
 - Projected files in both modes can have their filetype set to BASIC
   (`&FFB`) through the image view, and the backing objects report the same
   filetype.
+- Two image files in the same backing directory can use different `reverse`
+  lists, and each view only maps the extension configured by that image.
 
 The program leaves the generated test tree in place so it can be inspected
 after a failure.
