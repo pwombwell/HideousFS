@@ -28,6 +28,8 @@ The current assertions check:
 - Existing projected files in both modes can be overwritten through the image
   view, update the expected backing object, and report the new extent,
   including when the replacement is shorter than the original file.
+- `EXT#` assignment through a projected file updates the backing object's
+  extent.
 - Hideous mode can rename `c.main` to `c.renamed` and move backing
   `main/c` to `renamed/c`.
 - Beautiful mode can rename `main/c` to `renamed/c` and move backing
