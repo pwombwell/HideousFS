@@ -57,6 +57,7 @@ enum {
     fsargs_SetEXT = 3,
     fsargs_ReadEXT = 2,
     fsargs_ReadAllocation = 4,
+    fsargs_ReadEOFStatus = 5,
     fsargs_Flush = 6,
     fsargs_EnsureSize = 7,
     fsargs_ReadLoadExec = 9,
@@ -1478,6 +1479,10 @@ _kernel_oserror *hideousfs_fsentry_args_handler(_kernel_swi_regs *regs, void *pr
 
     case fsargs_ReadAllocation:
         regs->r[2] = (int)round_up_to_multiple(file->extent, TempBufferSize);
+        return NULL;
+
+    case fsargs_ReadEOFStatus:
+        regs->r[2] = file->ptr >= file->extent ? -1 : 0;
         return NULL;
 
     case fsargs_Flush:

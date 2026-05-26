@@ -50,6 +50,8 @@ The current assertions check:
   a raw backing object could otherwise appear at the same image path.
 - Single-byte reads and writes after setting `PTR#`, bulk `OS_GBPB` reads,
   and bulk `OS_GBPB` writes through projected paths behave as expected.
+- `EOF#` is clear before the file extent and set at the file extent for
+  projected files.
 - Several projected read handles can be open at once and still read the
   expected data.
 - A projected file written through `OS_GBPB` reports the expected extent.
