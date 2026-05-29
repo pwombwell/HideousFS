@@ -95,7 +95,7 @@ Useful options:
 
 ```text
 --extension=directory|suffix|pass
---filetypes=pass
+--filetypes=pass|suffix|xattr
 --reverse=c,h,a,cpp,c++,o,s
 --foreground
 --readonly
@@ -105,6 +105,11 @@ Useful options:
 `extension=directory` presents backing names such as `leaf.c` as `c/leaf`.
 `extension=suffix` presents backing names such as `c/leaf` as `leaf.c`.
 `extension=pass` leaves leaf names unchanged.
+
+`filetypes=pass` leaves RISC OS metadata where it is. `filetypes=suffix`
+presents `user.RISC_OS.LoadExec` metadata as comma suffixes where possible.
+`filetypes=xattr` presents recognised comma suffixes such as `,ffa` and
+`,0-741829fc` as `user.RISC_OS.LoadExec`.
 
 Run the live FUSE smoke tests with:
 
@@ -150,5 +155,6 @@ ignore .git
 
 HideousFS is experimental. The RISC OS image filing system and the FUSE product
 are both early implementations. The FUSE binary currently supports read/write
-projection for `extension=directory`, `extension=suffix`, and `extension=pass`;
-RISC OS filetype conversion is still pass-through only.
+projection for `extension=directory`, `extension=suffix`, and `extension=pass`,
+with `filetypes=pass`, `filetypes=suffix`, and `filetypes=xattr` metadata
+presentation.

@@ -4,12 +4,14 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 
 #include <fuse.h>
@@ -22,9 +24,16 @@ typedef enum HideousFS_FuseExtensionMode {
     fuse_extension_pass
 } HideousFS_FuseExtensionMode;
 
+typedef enum HideousFS_FuseFiletypeMode {
+    fuse_filetypes_pass,
+    fuse_filetypes_suffix,
+    fuse_filetypes_xattr
+} HideousFS_FuseFiletypeMode;
+
 typedef struct HideousFS_Fuse {
     char backing_dir[PATH_MAX];
     HideousFS_FuseExtensionMode extension_mode;
+    HideousFS_FuseFiletypeMode filetype_mode;
     HideousFS_Image mapping;
     int readonly;
 } HideousFS_Fuse;
@@ -37,9 +46,33 @@ typedef struct stat HideousFS_FuseAttr;
 typedef fuse_fill_dir_t HideousFS_FuseFillDir;
 #endif
 
+#define RISCOS_LOAD_EXEC_XATTR "user.RISC_OS.LoadExec"
+#define MaxMetadataSuffix 32
+
 static void stat_to_fuse_attr(const struct stat *st, HideousFS_FuseAttr *attr);
 static int lstat_fuse_attr(const char *path, HideousFS_FuseAttr *attr);
+static int host_getxattr(const char *path, const char *name, void *value,
+                         size_t size);
+static int host_setxattr(const char *path, const char *name, const void *value,
+                         size_t size, int flags);
+static int host_listxattr(const char *path, char *list, size_t size);
+static int host_removexattr(const char *path, const char *name);
 static int parse_reverse_list(HideousFS_Fuse *fs, const char *list);
+static int is_hex_digit(char ch);
+static int is_hex_string(const char *text, size_t len);
+static int is_metadata_suffix_text(const char *text);
+static int split_metadata_suffix(const char *leaf, size_t leaf_len,
+                                 size_t *base_len, const char **suffix);
+static int strip_metadata_suffix(const char *src, char *dest,
+                                 size_t dest_size);
+static int loadexec_to_suffix(const void *value, size_t size,
+                              char *suffix, size_t suffix_size);
+static int suffix_to_loadexec(const char *suffix, unsigned char *value,
+                              size_t *size);
+static int read_xattr_suffix(const char *path, char *suffix,
+                             size_t suffix_size);
+static int append_metadata_suffix(char *dest, size_t dest_size,
+                                  const char *suffix);
 static int append_path_component(char *dest, size_t dest_size,
                                  const char *component,
                                  size_t component_len);
@@ -58,9 +91,22 @@ static int is_mapped_extension_component(const HideousFS_Fuse *fs,
                                          size_t component_len);
 static int is_hidden_real_name(const HideousFS_Fuse *fs, const char *leaf,
                                int is_directory);
+static int is_hidden_presented_path(const HideousFS_Fuse *fs,
+                                    const char *path);
 static int ensure_parent_directory(const char *path);
+static int find_comma_suffix_variant(const char *path, char *dest,
+                                     size_t dest_size);
+static int find_xattr_base_variant(const char *path, char *dest,
+                                   size_t dest_size);
 static int build_backing_path(const HideousFS_Fuse *fs, const char *path,
                               char *dest, size_t dest_size);
+static int resolve_existing_backing_path(const HideousFS_Fuse *fs,
+                                         const char *path,
+                                         char *dest, size_t dest_size);
+static int build_presented_leaf(const HideousFS_Fuse *fs,
+                                const char *backing_dir,
+                                const char *leaf,
+                                char *dest, size_t dest_size);
 static int resolve_directory_path(const HideousFS_Fuse *fs, const char *path,
                                   char *dest, size_t dest_size,
                                   char *synthetic_extension,
@@ -127,6 +173,44 @@ static int lstat_fuse_attr(const char *path, HideousFS_FuseAttr *attr)
     return 0;
 }
 
+static int host_getxattr(const char *path, const char *name, void *value,
+                         size_t size)
+{
+#ifdef __APPLE__
+    return (int)getxattr(path, name, value, size, 0, 0);
+#else
+    return (int)getxattr(path, name, value, size);
+#endif
+}
+
+static int host_setxattr(const char *path, const char *name, const void *value,
+                         size_t size, int flags)
+{
+#ifdef __APPLE__
+    return setxattr(path, name, value, size, 0, flags);
+#else
+    return setxattr(path, name, value, size, flags);
+#endif
+}
+
+static int host_listxattr(const char *path, char *list, size_t size)
+{
+#ifdef __APPLE__
+    return (int)listxattr(path, list, size, 0);
+#else
+    return (int)listxattr(path, list, size);
+#endif
+}
+
+static int host_removexattr(const char *path, const char *name)
+{
+#ifdef __APPLE__
+    return removexattr(path, name, 0);
+#else
+    return removexattr(path, name);
+#endif
+}
+
 static int parse_reverse_list(HideousFS_Fuse *fs, const char *list)
 {
     char copy[256];
@@ -166,6 +250,191 @@ static int parse_reverse_list(HideousFS_Fuse *fs, const char *list)
     }
 
     return fs->mapping.reverse_extension_count != 0;
+}
+
+static int is_hex_digit(char ch)
+{
+    return (ch >= '0' && ch <= '9') ||
+           (ch >= 'a' && ch <= 'f') ||
+           (ch >= 'A' && ch <= 'F');
+}
+
+static int is_hex_string(const char *text, size_t len)
+{
+    size_t i;
+
+    if (len == 0) {
+        return 0;
+    }
+
+    for (i = 0; i < len; ++i) {
+        if (!is_hex_digit(text[i])) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int is_metadata_suffix_text(const char *text)
+{
+    const char *dash;
+    size_t len = strlen(text);
+    size_t left_len;
+    size_t right_len;
+
+    if (len >= 1 && len <= 3 && is_hex_string(text, len)) {
+        return 1;
+    }
+
+    dash = strchr(text, '-');
+    if (dash == NULL || strchr(dash + 1, '-') != NULL) {
+        return 0;
+    }
+
+    left_len = (size_t)(dash - text);
+    right_len = strlen(dash + 1);
+    return left_len >= 1 && left_len <= 8 &&
+           right_len >= 1 && right_len <= 8 &&
+           is_hex_string(text, left_len) &&
+           is_hex_string(dash + 1, right_len);
+}
+
+static int split_metadata_suffix(const char *leaf, size_t leaf_len,
+                                 size_t *base_len, const char **suffix)
+{
+    const char *comma = NULL;
+    size_t i;
+
+    for (i = leaf_len; i > 0; --i) {
+        if (leaf[i - 1] == ',') {
+            comma = leaf + i - 1;
+            break;
+        }
+    }
+    if (comma == NULL || comma == leaf || comma[1] == '\0') {
+        return 0;
+    }
+
+    if (!is_metadata_suffix_text(comma + 1)) {
+        return 0;
+    }
+
+    if (base_len != NULL) {
+        *base_len = (size_t)(comma - leaf);
+    }
+    if (suffix != NULL) {
+        *suffix = comma;
+    }
+    return 1;
+}
+
+static int strip_metadata_suffix(const char *src, char *dest,
+                                 size_t dest_size)
+{
+    const char *leaf = last_path_component(src);
+    const char *suffix;
+    size_t prefix_len = (size_t)(leaf - src);
+    size_t base_len;
+
+    if (!split_metadata_suffix(leaf, strlen(leaf), &base_len, &suffix)) {
+        return hideousfs_copy_string(dest, dest_size, src);
+    }
+
+    if (prefix_len + base_len >= dest_size) {
+        return 0;
+    }
+
+    memcpy(dest, src, prefix_len);
+    memcpy(dest + prefix_len, leaf, base_len);
+    dest[prefix_len + base_len] = '\0';
+    return 1;
+}
+
+static int loadexec_to_suffix(const void *value, size_t size,
+                              char *suffix, size_t suffix_size)
+{
+    uint32_t load;
+    uint32_t exec;
+
+    if (size < 8) {
+        return 0;
+    }
+
+    memcpy(&load, value, sizeof(load));
+    memcpy(&exec, (const char *)value + 4, sizeof(exec));
+
+    if ((load & 0xfff00000u) == 0xfff00000u) {
+        unsigned int filetype = (unsigned int)((load >> 8) & 0xfffu);
+
+        if (filetype == 0xfff) {
+            return 0;
+        }
+        return snprintf(suffix, suffix_size, ",%03x", filetype) <
+               (int)suffix_size;
+    }
+
+    return snprintf(suffix, suffix_size, ",%x-%x", load, exec) <
+           (int)suffix_size;
+}
+
+static int suffix_to_loadexec(const char *suffix, unsigned char *value,
+                              size_t *size)
+{
+    const char *text = suffix[0] == ',' ? suffix + 1 : suffix;
+    const char *dash = strchr(text, '-');
+    uint32_t load;
+    uint32_t exec;
+    uint32_t attr = 0;
+
+    if (!is_metadata_suffix_text(text)) {
+        return 0;
+    }
+
+    if (dash == NULL) {
+        unsigned long filetype = strtoul(text, NULL, 16);
+
+        load = 0xfff00000u | (((uint32_t)filetype & 0xfffu) << 8);
+        exec = 0;
+    } else {
+        load = (uint32_t)strtoul(text, NULL, 16);
+        exec = (uint32_t)strtoul(dash + 1, NULL, 16);
+    }
+
+    memcpy(value, &load, sizeof(load));
+    memcpy(value + 4, &exec, sizeof(exec));
+    memcpy(value + 8, &attr, sizeof(attr));
+    *size = 12;
+    return 1;
+}
+
+static int read_xattr_suffix(const char *path, char *suffix,
+                             size_t suffix_size)
+{
+    unsigned char loadexec[12];
+    int bytes;
+
+    bytes = host_getxattr(path, RISCOS_LOAD_EXEC_XATTR, loadexec,
+                          sizeof(loadexec));
+    if (bytes < 0) {
+        return 0;
+    }
+
+    return loadexec_to_suffix(loadexec, (size_t)bytes, suffix, suffix_size);
+}
+
+static int append_metadata_suffix(char *dest, size_t dest_size,
+                                  const char *suffix)
+{
+    size_t len = strlen(dest);
+    size_t suffix_len = strlen(suffix);
+
+    if (len + suffix_len >= dest_size) {
+        return 0;
+    }
+
+    memcpy(dest + len, suffix, suffix_len + 1);
+    return 1;
 }
 
 static int append_path_component(char *dest, size_t dest_size,
@@ -248,9 +517,24 @@ static const char *previous_path_component(const char *path,
 static int split_extension(const HideousFS_Fuse *fs, const char *leaf,
                            const char **extension, size_t *base_len)
 {
-    const char *dot = strrchr(leaf, '.');
+    size_t logical_len = strlen(leaf);
+    size_t metadata_base_len;
+    const char *dot;
+    const char *scan;
 
-    if (dot == NULL || dot == leaf || dot[1] == '\0') {
+    if (split_metadata_suffix(leaf, logical_len, &metadata_base_len, NULL)) {
+        logical_len = metadata_base_len;
+    }
+
+    dot = NULL;
+    for (scan = leaf + logical_len; scan > leaf; --scan) {
+        if (scan[-1] == '.') {
+            dot = scan - 1;
+            break;
+        }
+    }
+
+    if (dot == NULL || dot == leaf || dot + 1 >= leaf + logical_len) {
         return -1;
     }
 
@@ -262,7 +546,8 @@ static int split_extension(const HideousFS_Fuse *fs, const char *leaf,
     }
 
     return hideousfs_mapped_extension_index(&fs->mapping, dot + 1,
-                                            strlen(dot + 1));
+                                            (size_t)((leaf + logical_len) -
+                                                     (dot + 1)));
 }
 
 static int split_mapped_extension(const HideousFS_Fuse *fs, const char *leaf,
@@ -299,6 +584,19 @@ static int is_hidden_real_name(const HideousFS_Fuse *fs, const char *leaf,
     }
 
     return 0;
+}
+
+static int is_hidden_presented_path(const HideousFS_Fuse *fs,
+                                    const char *path)
+{
+    const char *leaf;
+
+    if (fs->filetype_mode != fuse_filetypes_xattr) {
+        return 0;
+    }
+
+    leaf = last_path_component(path);
+    return split_metadata_suffix(leaf, strlen(leaf), NULL, NULL);
 }
 
 static int ensure_parent_directory(const char *path)
@@ -339,6 +637,78 @@ static int ensure_parent_directory(const char *path)
     return 0;
 }
 
+static int find_comma_suffix_variant(const char *path, char *dest,
+                                     size_t dest_size)
+{
+    char parent[PATH_MAX];
+    const char *leaf;
+    char *slash;
+    DIR *dir;
+    struct dirent *entry;
+    size_t leaf_len;
+
+    if (!hideousfs_copy_string(parent, sizeof(parent), path)) {
+        return 0;
+    }
+
+    slash = strrchr(parent, '/');
+    if (slash == NULL) {
+        return 0;
+    }
+    *slash = '\0';
+    leaf = slash + 1;
+    leaf_len = strlen(leaf);
+
+    dir = opendir(parent);
+    if (dir == NULL) {
+        return 0;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        size_t base_len;
+        const char *suffix;
+
+        if (strncmp(entry->d_name, leaf, leaf_len) != 0 ||
+            entry->d_name[leaf_len] != ',') {
+            continue;
+        }
+        if (!split_metadata_suffix(entry->d_name, strlen(entry->d_name),
+                                   &base_len, &suffix) ||
+            base_len != leaf_len) {
+            continue;
+        }
+
+        closedir(dir);
+        if (!hideousfs_copy_string(dest, dest_size, parent)) {
+            return 0;
+        }
+        return append_path_component(dest, dest_size, entry->d_name,
+                                     strlen(entry->d_name));
+    }
+
+    closedir(dir);
+    return 0;
+}
+
+static int find_xattr_base_variant(const char *path, char *dest,
+                                   size_t dest_size)
+{
+    char stripped[PATH_MAX];
+
+    if (!strip_metadata_suffix(path, stripped, sizeof(stripped))) {
+        return 0;
+    }
+    if (strcmp(stripped, path) == 0) {
+        return 0;
+    }
+    if (host_getxattr(stripped, RISCOS_LOAD_EXEC_XATTR, NULL, 0) < 0 &&
+        errno != ERANGE) {
+        return 0;
+    }
+
+    return hideousfs_copy_string(dest, dest_size, stripped);
+}
+
 static int build_backing_path(const HideousFS_Fuse *fs, const char *path,
                               char *dest, size_t dest_size)
 {
@@ -362,14 +732,17 @@ static int build_backing_path(const HideousFS_Fuse *fs, const char *path,
 
     if (fs->extension_mode == fuse_extension_suffix) {
         size_t base_len;
+        const char *metadata_suffix = NULL;
 
         if (!split_mapped_extension(fs, leaf, &extension, &base_len)) {
             return join_path(dest, dest_size, fs->backing_dir, relative);
         }
+        (void)split_metadata_suffix(leaf, strlen(leaf), NULL,
+                                    &metadata_suffix);
 
         prefix_end = leaf == relative ? leaf : leaf - 1;
         prefix_len = (size_t)(prefix_end - relative);
-        extension_len = strlen(extension);
+        extension_len = strcspn(extension, ",");
 
         if (!hideousfs_copy_string(dest, dest_size, fs->backing_dir)) {
             return 0;
@@ -380,7 +753,13 @@ static int build_backing_path(const HideousFS_Fuse *fs, const char *path,
         if (!append_path_component(dest, dest_size, extension, extension_len)) {
             return 0;
         }
-        return append_path_component(dest, dest_size, leaf, base_len);
+        if (!append_path_component(dest, dest_size, leaf, base_len)) {
+            return 0;
+        }
+        if (metadata_suffix != NULL) {
+            return append_metadata_suffix(dest, dest_size, metadata_suffix);
+        }
+        return 1;
     }
 
     extension = previous_path_component(path, leaf);
@@ -395,7 +774,14 @@ static int build_backing_path(const HideousFS_Fuse *fs, const char *path,
 
     prefix_end = extension == relative ? extension : extension - 1;
     prefix_len = (size_t)(prefix_end - relative);
-    leaf_len = strlen(leaf);
+    {
+        size_t metadata_base_len;
+
+        leaf_len = strlen(leaf);
+        if (split_metadata_suffix(leaf, leaf_len, &metadata_base_len, NULL)) {
+            leaf_len = metadata_base_len;
+        }
+    }
 
     if (!hideousfs_copy_string(dest, dest_size, fs->backing_dir)) {
         return 0;
@@ -410,7 +796,84 @@ static int build_backing_path(const HideousFS_Fuse *fs, const char *path,
     append_path_component(dest, dest_size, leaf, leaf_len);
     strcat(dest, ".");
     strncat(dest, extension, extension_len);
+    {
+        const char *metadata_suffix = NULL;
+
+        if (split_metadata_suffix(leaf, strlen(leaf), NULL,
+                                  &metadata_suffix)) {
+            return append_metadata_suffix(dest, dest_size, metadata_suffix);
+        }
+    }
     return 1;
+}
+
+static int resolve_existing_backing_path(const HideousFS_Fuse *fs,
+                                         const char *path,
+                                         char *dest, size_t dest_size)
+{
+    if (!build_backing_path(fs, path, dest, dest_size)) {
+        return 0;
+    }
+    if (lstat(dest, &(struct stat){0}) == 0) {
+        return 1;
+    }
+
+    if (fs->filetype_mode == fuse_filetypes_xattr &&
+        find_comma_suffix_variant(dest, dest, dest_size)) {
+        return 1;
+    }
+
+    if (fs->filetype_mode == fuse_filetypes_suffix &&
+        find_xattr_base_variant(dest, dest, dest_size)) {
+        return 1;
+    }
+
+    return 1;
+}
+
+static int build_presented_leaf(const HideousFS_Fuse *fs,
+                                const char *backing_dir,
+                                const char *leaf,
+                                char *dest, size_t dest_size)
+{
+    char path[PATH_MAX];
+    char suffix[MaxMetadataSuffix];
+    size_t base_len;
+    const char *metadata_suffix;
+
+    switch (fs->filetype_mode) {
+    case fuse_filetypes_pass:
+        return hideousfs_copy_string(dest, dest_size, leaf);
+
+    case fuse_filetypes_suffix:
+        if (split_metadata_suffix(leaf, strlen(leaf), NULL, NULL)) {
+            return hideousfs_copy_string(dest, dest_size, leaf);
+        }
+        if (!join_path(path, sizeof(path), backing_dir, leaf)) {
+            return 0;
+        }
+        if (!hideousfs_copy_string(dest, dest_size, leaf)) {
+            return 0;
+        }
+        if (read_xattr_suffix(path, suffix, sizeof(suffix))) {
+            return append_metadata_suffix(dest, dest_size, suffix);
+        }
+        return 1;
+
+    case fuse_filetypes_xattr:
+        if (split_metadata_suffix(leaf, strlen(leaf), &base_len,
+                                  &metadata_suffix)) {
+            if (base_len >= dest_size) {
+                return 0;
+            }
+            memcpy(dest, leaf, base_len);
+            dest[base_len] = '\0';
+            return 1;
+        }
+        return hideousfs_copy_string(dest, dest_size, leaf);
+    }
+
+    return 0;
 }
 
 static int resolve_directory_path(const HideousFS_Fuse *fs, const char *path,
@@ -473,8 +936,12 @@ static int directory_contains_extension(const HideousFS_Fuse *fs,
     }
 
     while ((entry = readdir(dir)) != NULL) {
-        if (split_extension(fs, entry->d_name, &entry_extension, NULL) >= 0 &&
-            strcmp(entry_extension, extension) == 0) {
+        int extension_index = split_extension(fs, entry->d_name,
+                                              &entry_extension, NULL);
+
+        if (extension_index >= 0 &&
+            strcmp(fs->mapping.reverse_extensions[extension_index],
+                   extension) == 0) {
             closedir(dir);
             return 1;
         }
@@ -520,9 +987,9 @@ static int read_projected_directory(const HideousFS_Fuse *fs,
     }
 
     while ((entry = readdir(dir)) != NULL) {
-        const char *extension;
         int extension_index;
-        const char *projected_name = entry->d_name;
+        char presented_leaf[PATH_MAX];
+        const char *projected_name = presented_leaf;
         char path[PATH_MAX];
         struct stat raw_st;
         HideousFS_FuseAttr attr;
@@ -541,18 +1008,24 @@ static int read_projected_directory(const HideousFS_Fuse *fs,
             return -errno;
         }
 
-        if (is_hidden_real_name(fs, entry->d_name, S_ISDIR(raw_st.st_mode))) {
+        if (!build_presented_leaf(fs, backing_dir, entry->d_name,
+                                  presented_leaf, sizeof(presented_leaf))) {
+            closedir(dir);
+            return -ENAMETOOLONG;
+        }
+
+        if (is_hidden_real_name(fs, presented_leaf, S_ISDIR(raw_st.st_mode))) {
             continue;
         }
 
-        extension_index = split_extension(fs, entry->d_name, &extension, NULL);
+        extension_index = split_extension(fs, presented_leaf, NULL, NULL);
         if (fs->extension_mode == fuse_extension_directory &&
             extension_index >= 0) {
             if ((seen_extensions & (1u << extension_index)) != 0) {
                 continue;
             }
             seen_extensions |= 1u << extension_index;
-            projected_name = extension;
+            projected_name = fs->mapping.reverse_extensions[extension_index];
             synthetic = 1;
         }
 
@@ -595,24 +1068,48 @@ static int read_synthetic_directory(const HideousFS_Fuse *fs,
     }
 
     while ((entry = readdir(dir)) != NULL) {
-        const char *entry_extension;
         size_t base_len;
+        char presented_leaf[PATH_MAX];
         char projected_name[PATH_MAX];
         char path[PATH_MAX];
         HideousFS_FuseAttr attr;
         int error;
 
-        if (split_extension(fs, entry->d_name, &entry_extension, &base_len) < 0 ||
-            strcmp(entry_extension, extension) != 0) {
-            continue;
-        }
-
-        if (base_len >= sizeof(projected_name)) {
+        if (!build_presented_leaf(fs, backing_dir, entry->d_name,
+                                  presented_leaf, sizeof(presented_leaf))) {
             closedir(dir);
             return -ENAMETOOLONG;
         }
-        memcpy(projected_name, entry->d_name, base_len);
-        projected_name[base_len] = '\0';
+
+        {
+            int extension_index = split_extension(fs, presented_leaf,
+                                                  NULL, &base_len);
+
+            if (extension_index < 0 ||
+                strcmp(fs->mapping.reverse_extensions[extension_index],
+                       extension) != 0) {
+                continue;
+            }
+        }
+
+        {
+            const char *metadata_suffix = NULL;
+
+            (void)split_metadata_suffix(presented_leaf, strlen(presented_leaf),
+                                        NULL, &metadata_suffix);
+            if (base_len >= sizeof(projected_name)) {
+                closedir(dir);
+                return -ENAMETOOLONG;
+            }
+            memcpy(projected_name, presented_leaf, base_len);
+            projected_name[base_len] = '\0';
+            if (metadata_suffix != NULL &&
+                !append_metadata_suffix(projected_name, sizeof(projected_name),
+                                        metadata_suffix)) {
+                closedir(dir);
+                return -ENAMETOOLONG;
+            }
+        }
 
         if (index++ < offset) {
             continue;
@@ -685,10 +1182,13 @@ static int read_suffix_projected_directory(const HideousFS_Fuse *fs,
 
             while ((child = readdir(bucket)) != NULL) {
                 char child_path[PATH_MAX];
+                char presented_leaf[PATH_MAX];
                 char projected_name[PATH_MAX];
                 HideousFS_FuseAttr attr;
                 size_t child_len;
                 size_t extension_len;
+                size_t logical_child_len;
+                const char *metadata_suffix = NULL;
                 int error;
 
                 if (strcmp(child->d_name, ".") == 0 ||
@@ -696,18 +1196,41 @@ static int read_suffix_projected_directory(const HideousFS_Fuse *fs,
                     continue;
                 }
 
-                child_len = strlen(child->d_name);
-                extension_len = strlen(entry->d_name);
-                if (child_len + 1 + extension_len >= sizeof(projected_name)) {
+                if (!build_presented_leaf(fs, path, child->d_name,
+                                          presented_leaf,
+                                          sizeof(presented_leaf))) {
                     closedir(bucket);
                     closedir(dir);
                     return -ENAMETOOLONG;
                 }
 
-                memcpy(projected_name, child->d_name, child_len);
+                child_len = strlen(presented_leaf);
+                logical_child_len = child_len;
+                if (split_metadata_suffix(presented_leaf, child_len,
+                                          &logical_child_len,
+                                          &metadata_suffix)) {
+                    child_len = logical_child_len;
+                }
+                extension_len = strlen(entry->d_name);
+                if (strlen(presented_leaf) + 1 + extension_len >=
+                    sizeof(projected_name)) {
+                    closedir(bucket);
+                    closedir(dir);
+                    return -ENAMETOOLONG;
+                }
+
+                memcpy(projected_name, presented_leaf, child_len);
                 projected_name[child_len] = '.';
                 memcpy(projected_name + child_len + 1, entry->d_name,
                        extension_len + 1);
+                if (metadata_suffix != NULL &&
+                    !append_metadata_suffix(projected_name,
+                                            sizeof(projected_name),
+                                            metadata_suffix)) {
+                    closedir(bucket);
+                    closedir(dir);
+                    return -ENAMETOOLONG;
+                }
 
                 if (index++ < offset) {
                     continue;
@@ -772,6 +1295,10 @@ static int hideousfs_fuse_getattr(const char *path, HideousFS_FuseAttr *attr,
 
     (void)fi;
 
+    if (is_hidden_presented_path(fs, path)) {
+        return -ENOENT;
+    }
+
     if (!resolve_directory_path(fs, path, backing_path, sizeof(backing_path),
                                 synthetic_extension,
                                 sizeof(synthetic_extension))) {
@@ -788,7 +1315,8 @@ static int hideousfs_fuse_getattr(const char *path, HideousFS_FuseAttr *attr,
         return fill_synthetic_dir_attr(attr);
     }
 
-    if (!build_backing_path(fs, path, backing_path, sizeof(backing_path))) {
+    if (!resolve_existing_backing_path(fs, path, backing_path,
+                                       sizeof(backing_path))) {
         return -ENAMETOOLONG;
     }
 
@@ -860,7 +1388,12 @@ static int hideousfs_fuse_open(const char *path, struct fuse_file_info *fi)
     char backing_path[PATH_MAX];
     int fd;
 
-    if (!build_backing_path(fs, path, backing_path, sizeof(backing_path))) {
+    if (is_hidden_presented_path(fs, path)) {
+        return -ENOENT;
+    }
+
+    if (!resolve_existing_backing_path(fs, path, backing_path,
+                                       sizeof(backing_path))) {
         return -ENAMETOOLONG;
     }
 
@@ -883,7 +1416,18 @@ static int hideousfs_fuse_create(const char *path, mode_t mode,
     if (fs->readonly) {
         return -EROFS;
     }
-    if (!build_backing_path(fs, path, backing_path, sizeof(backing_path))) {
+    if (is_hidden_presented_path(fs, path)) {
+        return -ENOENT;
+    }
+    if (is_hidden_presented_path(fs, path)) {
+        return -ENOENT;
+    }
+    if (is_hidden_presented_path(fs, path)) {
+        return -ENOENT;
+    }
+
+    if (!resolve_existing_backing_path(fs, path, backing_path,
+                                       sizeof(backing_path))) {
         return -ENAMETOOLONG;
     }
     {
@@ -928,6 +1472,9 @@ static int hideousfs_fuse_write(const char *path, const char *buf, size_t size,
     if (fs->readonly) {
         return -EROFS;
     }
+    if (is_hidden_presented_path(fs, path)) {
+        return -ENOENT;
+    }
 
     bytes = pwrite((int)fi->fh, buf, size, offset);
     if (bytes < 0) {
@@ -945,12 +1492,20 @@ static int hideousfs_fuse_truncate(const char *path, off_t size,
     if (fs->readonly) {
         return -EROFS;
     }
+    if (is_hidden_presented_path(fs, path)) {
+        return -ENOENT;
+    }
 
     if (fi != NULL) {
         return ftruncate((int)fi->fh, size) == 0 ? 0 : -errno;
     }
 
-    if (!build_backing_path(fs, path, backing_path, sizeof(backing_path))) {
+    if (is_hidden_presented_path(fs, path)) {
+        return -ENOENT;
+    }
+
+    if (!resolve_existing_backing_path(fs, path, backing_path,
+                                       sizeof(backing_path))) {
         return -ENAMETOOLONG;
     }
 
@@ -965,7 +1520,14 @@ static int hideousfs_fuse_unlink(const char *path)
     if (fs->readonly) {
         return -EROFS;
     }
-    if (!build_backing_path(fs, path, backing_path, sizeof(backing_path))) {
+    if (is_hidden_presented_path(fs, path)) {
+        return -ENOENT;
+    }
+    if (is_hidden_presented_path(fs, path)) {
+        return -ENOENT;
+    }
+    if (!resolve_existing_backing_path(fs, path, backing_path,
+                                       sizeof(backing_path))) {
         return -ENAMETOOLONG;
     }
     return unlink(backing_path) == 0 ? 0 : -errno;
@@ -979,10 +1541,14 @@ static int hideousfs_fuse_mkdir(const char *path, mode_t mode)
     if (fs->readonly) {
         return -EROFS;
     }
+    if (is_hidden_presented_path(fs, path)) {
+        return -ENOENT;
+    }
     if (is_hidden_real_name(fs, last_path_component(path), 1)) {
         return -EEXIST;
     }
-    if (!build_backing_path(fs, path, backing_path, sizeof(backing_path))) {
+    if (!resolve_existing_backing_path(fs, path, backing_path,
+                                       sizeof(backing_path))) {
         return -ENAMETOOLONG;
     }
     return mkdir(backing_path, mode) == 0 ? 0 : -errno;
@@ -1021,7 +1587,12 @@ static int hideousfs_fuse_rename(const char *from, const char *to,
     if (flags != 0) {
         return -EINVAL;
     }
-    if (!build_backing_path(fs, from, backing_from, sizeof(backing_from)) ||
+    if (is_hidden_presented_path(fs, from) ||
+        is_hidden_presented_path(fs, to)) {
+        return -ENOENT;
+    }
+    if (!resolve_existing_backing_path(fs, from, backing_from,
+                                       sizeof(backing_from)) ||
         !build_backing_path(fs, to, backing_to, sizeof(backing_to))) {
         return -ENAMETOOLONG;
     }
@@ -1059,6 +1630,164 @@ static int hideousfs_fuse_fsync(const char *path, int datasync,
     return result == 0 ? 0 : -errno;
 }
 
+#ifdef __APPLE__
+static int hideousfs_fuse_setxattr(const char *path, const char *name,
+                                   const char *value, size_t size, int flags,
+                                   uint32_t position)
+#else
+static int hideousfs_fuse_setxattr(const char *path, const char *name,
+                                   const char *value, size_t size, int flags)
+#endif
+{
+    HideousFS_Fuse *fs = (HideousFS_Fuse *)fuse_get_context()->private_data;
+    char backing_path[PATH_MAX];
+
+#ifdef __APPLE__
+    if (position != 0) {
+        return -EINVAL;
+    }
+#endif
+    if (fs->readonly) {
+        return -EROFS;
+    }
+    if (!resolve_existing_backing_path(fs, path, backing_path,
+                                       sizeof(backing_path))) {
+        return -ENAMETOOLONG;
+    }
+
+    return host_setxattr(backing_path, name, value, size, flags) == 0 ?
+           0 : -errno;
+}
+
+#ifdef __APPLE__
+static int hideousfs_fuse_getxattr(const char *path, const char *name,
+                                   char *value, size_t size,
+                                   uint32_t position)
+#else
+static int hideousfs_fuse_getxattr(const char *path, const char *name,
+                                   char *value, size_t size)
+#endif
+{
+    HideousFS_Fuse *fs = (HideousFS_Fuse *)fuse_get_context()->private_data;
+    char backing_path[PATH_MAX];
+    const char *leaf;
+    const char *suffix;
+    unsigned char loadexec[12];
+    size_t loadexec_size;
+    int bytes;
+
+#ifdef __APPLE__
+    if (position != 0) {
+        return -EINVAL;
+    }
+#endif
+
+    if (!resolve_existing_backing_path(fs, path, backing_path,
+                                       sizeof(backing_path))) {
+        return -ENAMETOOLONG;
+    }
+
+    bytes = host_getxattr(backing_path, name, value, size);
+    if (bytes >= 0) {
+        return bytes;
+    }
+
+    if (fs->filetype_mode != fuse_filetypes_xattr ||
+        strcmp(name, RISCOS_LOAD_EXEC_XATTR) != 0) {
+        return -errno;
+    }
+
+    leaf = last_path_component(backing_path);
+    if (!split_metadata_suffix(leaf, strlen(leaf), NULL, &suffix) ||
+        !suffix_to_loadexec(suffix, loadexec, &loadexec_size)) {
+        return -errno;
+    }
+
+    if (size == 0) {
+        return (int)loadexec_size;
+    }
+    if (size < loadexec_size) {
+        return -ERANGE;
+    }
+
+    memcpy(value, loadexec, loadexec_size);
+    return (int)loadexec_size;
+}
+
+static int hideousfs_fuse_listxattr(const char *path, char *list, size_t size)
+{
+    HideousFS_Fuse *fs = (HideousFS_Fuse *)fuse_get_context()->private_data;
+    char backing_path[PATH_MAX];
+    const char *leaf;
+    const char *suffix;
+    int bytes;
+    size_t required;
+    size_t name_len = sizeof(RISCOS_LOAD_EXEC_XATTR);
+    int has_riscos_xattr = 0;
+
+    if (!resolve_existing_backing_path(fs, path, backing_path,
+                                       sizeof(backing_path))) {
+        return -ENAMETOOLONG;
+    }
+
+    bytes = host_listxattr(backing_path, list, size);
+    if (bytes < 0) {
+        return -errno;
+    }
+
+    if (fs->filetype_mode != fuse_filetypes_xattr) {
+        return bytes;
+    }
+
+    leaf = last_path_component(backing_path);
+    if (!split_metadata_suffix(leaf, strlen(leaf), NULL, &suffix)) {
+        return bytes;
+    }
+
+    if (size != 0) {
+        size_t offset = 0;
+
+        while (offset < (size_t)bytes) {
+            if (strcmp(list + offset, RISCOS_LOAD_EXEC_XATTR) == 0) {
+                has_riscos_xattr = 1;
+                break;
+            }
+            offset += strlen(list + offset) + 1;
+        }
+    }
+
+    if (has_riscos_xattr) {
+        return bytes;
+    }
+
+    required = (size_t)bytes + name_len;
+    if (size == 0) {
+        return (int)required;
+    }
+    if (size < required) {
+        return -ERANGE;
+    }
+
+    memcpy(list + bytes, RISCOS_LOAD_EXEC_XATTR, name_len);
+    return (int)required;
+}
+
+static int hideousfs_fuse_removexattr(const char *path, const char *name)
+{
+    HideousFS_Fuse *fs = (HideousFS_Fuse *)fuse_get_context()->private_data;
+    char backing_path[PATH_MAX];
+
+    if (fs->readonly) {
+        return -EROFS;
+    }
+    if (!resolve_existing_backing_path(fs, path, backing_path,
+                                       sizeof(backing_path))) {
+        return -ENAMETOOLONG;
+    }
+
+    return host_removexattr(backing_path, name) == 0 ? 0 : -errno;
+}
+
 static const struct fuse_operations hideousfs_fuse_ops = {
     .getattr = hideousfs_fuse_getattr,
     .readdir = hideousfs_fuse_readdir,
@@ -1072,7 +1801,11 @@ static const struct fuse_operations hideousfs_fuse_ops = {
     .rmdir = hideousfs_fuse_rmdir,
     .rename = hideousfs_fuse_rename,
     .release = hideousfs_fuse_release,
-    .fsync = hideousfs_fuse_fsync
+    .fsync = hideousfs_fuse_fsync,
+    .setxattr = hideousfs_fuse_setxattr,
+    .getxattr = hideousfs_fuse_getxattr,
+    .listxattr = hideousfs_fuse_listxattr,
+    .removexattr = hideousfs_fuse_removexattr
 };
 
 static int parse_args(int argc, char **argv, HideousFS_Fuse *fs,
@@ -1101,12 +1834,11 @@ static int parse_args(int argc, char **argv, HideousFS_Fuse *fs,
         } else if (strcmp(argv[i], "--extension=pass") == 0) {
             fs->extension_mode = fuse_extension_pass;
         } else if (strcmp(argv[i], "--filetypes=pass") == 0) {
-            /* pass is currently the only implemented filetype mode. */
-        } else if (strncmp(argv[i], "--filetypes=", 12) == 0) {
-            fprintf(stderr, "%s: only --filetypes=pass is implemented\n",
-                    argv[0]);
-            free(fuse_argv);
-            return -EINVAL;
+            fs->filetype_mode = fuse_filetypes_pass;
+        } else if (strcmp(argv[i], "--filetypes=suffix") == 0) {
+            fs->filetype_mode = fuse_filetypes_suffix;
+        } else if (strcmp(argv[i], "--filetypes=xattr") == 0) {
+            fs->filetype_mode = fuse_filetypes_xattr;
         } else if (strcmp(argv[i], "--readonly") == 0) {
             fs->readonly = 1;
         } else if (strcmp(argv[i], "--foreground") == 0) {
@@ -1180,6 +1912,7 @@ static int run_selftest(void)
     memset(&fs, 0, sizeof(fs));
     hideousfs_initialise_default_config(&fs.mapping);
     fs.extension_mode = fuse_extension_directory;
+    fs.filetype_mode = fuse_filetypes_pass;
     strcpy(fs.backing_dir, "/tmp/hideousfs-backing");
 
     ok = expect_path(&fs, "/", "/tmp/hideousfs-backing") && ok;
@@ -1218,6 +1951,7 @@ int main(int argc, char **argv)
     memset(&fs, 0, sizeof(fs));
     hideousfs_initialise_default_config(&fs.mapping);
     fs.extension_mode = fuse_extension_directory;
+    fs.filetype_mode = fuse_filetypes_pass;
 
     error = parse_args(argc, argv, &fs, &fuse_argv, &fuse_argc, &run_tests);
     if (error != 0) {

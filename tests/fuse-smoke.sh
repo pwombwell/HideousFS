@@ -24,8 +24,9 @@ cleanup() {
 
 start_mount() {
     local mode=$1
+    shift
 
-    "${binary}" "--extension=${mode}" --foreground "${tmp}/backing" "${tmp}/mnt" &
+    "${binary}" "--extension=${mode}" "$@" --foreground "${tmp}/backing" "${tmp}/mnt" &
     mount_pid=$!
 
     for _ in {1..50}; do
@@ -51,10 +52,25 @@ stop_mount() {
 assert_file() {
     local path=$1
     local expected=$2
+    local i
 
+    for i in {1..20}; do
+        [[ -f "${path}" ]] && break
+        sleep 0.1
+    done
     [[ -f "${path}" ]] || fail "missing file ${path}"
     [[ "$(cat "${path}")" == "${expected}" ]] ||
         fail "unexpected contents in ${path}"
+}
+
+assert_xattr_hex() {
+    local path=$1
+    local expected=$2
+    local actual
+
+    actual=$(xattr -p -x user.RISC_OS.LoadExec "${path}" | tr -d ' \n' | tr '[:upper:]' '[:lower:]')
+    [[ "${actual}" == "${expected}" ]] ||
+        fail "unexpected LoadExec xattr on ${path}: ${actual}"
 }
 
 reset_tree() {
@@ -69,11 +85,13 @@ trap cleanup EXIT
 
 mkdir -p "${tmp}/backing/src"
 printf 'c file\n' > "${tmp}/backing/leaf.c"
+printf 'typed c file\n' > "${tmp}/backing/typed.c,ffb"
 printf 'h file\n' > "${tmp}/backing/src/header.h"
 printf 'plain\n' > "${tmp}/backing/Readme"
 
 start_mount directory
 assert_file "${tmp}/mnt/c/leaf" "c file"
+assert_file "${tmp}/mnt/c/typed,ffb" "typed c file"
 assert_file "${tmp}/mnt/src/h/header" "h file"
 printf 'created\n' > "${tmp}/mnt/h/newleaf"
 assert_file "${tmp}/backing/newleaf.h" "created"
@@ -82,6 +100,35 @@ mv "${tmp}/mnt/h/newleaf" "${tmp}/mnt/c/newleaf"
 assert_file "${tmp}/backing/newleaf.c" "created"
 rm "${tmp}/mnt/c/newleaf"
 [[ ! -e "${tmp}/backing/newleaf.c" ]] || fail "unlink left c backing file"
+stop_mount
+rm -rf "${tmp}"
+tmp=
+
+reset_tree
+printf 'ps file\n' > "${tmp}/backing/Printout"
+xattr -w -x user.RISC_OS.LoadExec "00 F5 FF FF 00 00 00 00 03 00 00 00" "${tmp}/backing/Printout"
+printf 'basic file\n' > "${tmp}/backing/Smoke,ffb"
+printf 'typed c file\n' > "${tmp}/backing/typed.c,ffb"
+
+start_mount directory --filetypes=suffix
+assert_file "${tmp}/mnt/Printout,ff5" "ps file"
+assert_file "${tmp}/mnt/Smoke,ffb" "basic file"
+assert_file "${tmp}/mnt/c/typed,ffb" "typed c file"
+stop_mount
+rm -rf "${tmp}"
+tmp=
+
+reset_tree
+printf 'basic file\n' > "${tmp}/backing/Smoke,ffb"
+printf 'typed c file\n' > "${tmp}/backing/typed.c,ffb"
+
+start_mount directory --filetypes=xattr
+assert_file "${tmp}/mnt/Smoke" "basic file"
+[[ ! -e "${tmp}/mnt/Smoke,ffb" ]] || fail "comma metadata name is visible in xattr mode"
+assert_xattr_hex "${tmp}/mnt/Smoke" "00fbffff0000000000000000"
+assert_file "${tmp}/mnt/c/typed" "typed c file"
+[[ ! -e "${tmp}/mnt/c/typed,ffb" ]] || fail "comma extension metadata name is visible in xattr mode"
+assert_xattr_hex "${tmp}/mnt/c/typed" "00fbffff0000000000000000"
 stop_mount
 rm -rf "${tmp}"
 tmp=
