@@ -74,6 +74,8 @@ static int add_virtual_dir_entry(HideousFS_Fuse *fs, const char *value);
 static int parse_config_line(HideousFS_Fuse *fs, char *line,
                              int *config_reverse_seen);
 static int parse_config_file(HideousFS_Fuse *fs, const char *path);
+static int ignore_mountpoint_if_inside_backing(HideousFS_Fuse *fs,
+                                               const char *mountpoint);
 static int is_hex_digit(char ch);
 static int is_hex_string(const char *text, size_t len);
 static int is_metadata_suffix_text(const char *text);
@@ -520,6 +522,31 @@ static int parse_config_file(HideousFS_Fuse *fs, const char *path)
 
     fclose(file);
     return 0;
+}
+
+static int ignore_mountpoint_if_inside_backing(HideousFS_Fuse *fs,
+                                               const char *mountpoint)
+{
+    char mount_path[PATH_MAX];
+    size_t backing_len = strlen(fs->backing_dir);
+    const char *relative;
+
+    if (realpath(mountpoint, mount_path) == NULL) {
+        return 0;
+    }
+
+    if (strcmp(mount_path, fs->backing_dir) == 0) {
+        fprintf(stderr, "hideousfs-fuse: mount point must not be the backing directory\n");
+        return -EINVAL;
+    }
+
+    if (strncmp(mount_path, fs->backing_dir, backing_len) != 0 ||
+        mount_path[backing_len] != '/') {
+        return 0;
+    }
+
+    relative = mount_path + backing_len + 1;
+    return add_ignore_entry(fs, relative) ? 0 : -EINVAL;
 }
 
 static int is_hex_digit(char ch)
@@ -2454,6 +2481,12 @@ static int parse_args(int argc, char **argv, HideousFS_Fuse *fs,
             }
             backing_seen = 1;
         } else if (!mount_seen) {
+            int error = ignore_mountpoint_if_inside_backing(fs, argv[i]);
+
+            if (error != 0) {
+                free(fuse_argv);
+                return error;
+            }
             fuse_argv[fuse_argc++] = argv[i];
             mount_seen = 1;
         } else {

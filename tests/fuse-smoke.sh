@@ -4,6 +4,7 @@ set -euo pipefail
 binary=${1:-build/hideousfs-fuse}
 tmp=
 mount_pid=
+mount_point=
 
 fail() {
     echo "FAIL: $*" >&2
@@ -12,8 +13,8 @@ fail() {
 
 cleanup() {
     if [[ -n "${tmp}" ]]; then
-        if mount | grep -q "on ${tmp}/mnt "; then
-            umount "${tmp}/mnt" >/dev/null 2>&1 || true
+        if [[ -n "${mount_point}" ]] && mount | grep -q "on ${mount_point} "; then
+            umount "${mount_point}" >/dev/null 2>&1 || true
         fi
         if [[ -n "${mount_pid}" ]]; then
             wait "${mount_pid}" >/dev/null 2>&1 || true
@@ -26,11 +27,11 @@ start_mount() {
     local mode=$1
     shift
 
-    "${binary}" "--extension=${mode}" "$@" --foreground "${tmp}/backing" "${tmp}/mnt" &
+    "${binary}" "--extension=${mode}" "$@" --foreground "${tmp}/backing" "${mount_point}" &
     mount_pid=$!
 
     for _ in {1..50}; do
-        if mount | grep -q "on ${tmp}/mnt "; then
+        if mount | grep -q "on ${mount_point} "; then
             return
         fi
         sleep 0.1
@@ -40,8 +41,8 @@ start_mount() {
 }
 
 stop_mount() {
-    if mount | grep -q "on ${tmp}/mnt "; then
-        umount "${tmp}/mnt"
+    if mount | grep -q "on ${mount_point} "; then
+        umount "${mount_point}"
     fi
     if [[ -n "${mount_pid}" ]]; then
         wait "${mount_pid}" >/dev/null 2>&1 || true
@@ -76,6 +77,7 @@ assert_xattr_hex() {
 reset_tree() {
     tmp=$(mktemp -d /private/tmp/hideousfs-fuse-test.XXXXXX)
     mkdir -p "${tmp}/backing" "${tmp}/mnt"
+    mount_point="${tmp}/mnt"
 }
 
 "${binary}" --selftest >/dev/null
@@ -176,6 +178,18 @@ mv "${tmp}/mnt/newleaf.h" "${tmp}/mnt/newleaf.c"
 assert_file "${tmp}/backing/c/newleaf" "created"
 rm "${tmp}/mnt/newleaf.c"
 [[ ! -e "${tmp}/backing/c/newleaf" ]] || fail "unlink left c backing file"
+stop_mount
+rm -rf "${tmp}"
+tmp=
+
+reset_tree
+mkdir -p "${tmp}/backing/c" "${tmp}/backing/mnt"
+printf 'c file\n' > "${tmp}/backing/c/leaf"
+mount_point="${tmp}/backing/mnt"
+
+start_mount suffix
+assert_file "${mount_point}/leaf.c" "c file"
+! ls -A "${mount_point}" | grep -qx "mnt" || fail "mountpoint is visible inside backing view"
 stop_mount
 rm -rf "${tmp}"
 tmp=
