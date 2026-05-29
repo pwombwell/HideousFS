@@ -39,13 +39,16 @@ FUSE_LDLIBS := $(shell $(PKG_CONFIG) --libs fuse3)
 
 .DEFAULT_GOAL := all
 
-.PHONY: all clean check-tools fuse check-fuse-tools
+.PHONY: all clean check-tools fuse fuse-test check-fuse-tools
 
 all: check-tools $(MODULE)
 	@echo "Built module: $(MODULE)"
 
 fuse: check-fuse-tools $(FUSE_BIN)
 	@echo "Built FUSE binary: $(FUSE_BIN)"
+
+fuse-test: fuse
+	tests/fuse-smoke.sh "$(FUSE_BIN)"
 
 check-tools:
 	@command -v "$(CC)" >/dev/null 2>&1 || { echo "error: compiler '$(CC)' not found"; exit 1; }

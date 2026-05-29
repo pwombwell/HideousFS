@@ -1,6 +1,7 @@
 # HideousFS
 
-HideousFS is a RISC OS image filing system that presents a transformed view of a directory.
+HideousFS is a family of projection filesystems that present transformed views
+of source directories.
 
 It is intended for source trees that need to be comfortable both on RISC OS and on Unix-like systems. Unix and GitHub prefer names such as `leaf.c`; RISC OS source conventions often use names such as `c.leaf`. HideousFS lets one layout be viewed as the other.
 
@@ -76,6 +77,41 @@ Readme
 
 This is mainly useful for conversion. Copying files out of a Beautiful-mode view can produce a Unix-friendly layout.
 
+## FUSE build
+
+The FUSE product builds a Unix/macOS binary using `pkg-config fuse3`:
+
+```sh
+make fuse
+```
+
+Mount a Unix backing directory with:
+
+```sh
+build/hideousfs-fuse [options] <backing-directory> <mount-point>
+```
+
+Useful options:
+
+```text
+--extension=directory|suffix|pass
+--filetypes=pass
+--reverse=c,h,a,cpp,c++,o,s
+--foreground
+--readonly
+--debug
+```
+
+`extension=directory` presents backing names such as `leaf.c` as `c/leaf`.
+`extension=suffix` presents backing names such as `c/leaf` as `leaf.c`.
+`extension=pass` leaves leaf names unchanged.
+
+Run the live FUSE smoke tests with:
+
+```sh
+make fuse-test
+```
+
 ## Example configuration
 
 ```text
@@ -112,5 +148,7 @@ ignore .git
 
 ## Status
 
-HideousFS is experimental. The initial target is a read-only image filing system that can open a config file and show a transformed catalogue of the surrounding directory. Writes, renames, collision handling, and persistent empty synthetic directories can be added once the basic read path is reliable.
-```
+HideousFS is experimental. The RISC OS image filing system and the FUSE product
+are both early implementations. The FUSE binary currently supports read/write
+projection for `extension=directory`, `extension=suffix`, and `extension=pass`;
+RISC OS filetype conversion is still pass-through only.

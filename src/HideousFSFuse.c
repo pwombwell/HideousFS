@@ -18,6 +18,7 @@
 
 typedef enum HideousFS_FuseExtensionMode {
     fuse_extension_directory,
+    fuse_extension_suffix,
     fuse_extension_pass
 } HideousFS_FuseExtensionMode;
 
@@ -50,10 +51,14 @@ static const char *previous_path_component(const char *path,
                                            const char *component);
 static int split_extension(const HideousFS_Fuse *fs, const char *leaf,
                            const char **extension, size_t *base_len);
+static int split_mapped_extension(const HideousFS_Fuse *fs, const char *leaf,
+                                  const char **extension, size_t *base_len);
 static int is_mapped_extension_component(const HideousFS_Fuse *fs,
                                          const char *component,
                                          size_t component_len);
-static int is_hidden_real_name(const HideousFS_Fuse *fs, const char *leaf);
+static int is_hidden_real_name(const HideousFS_Fuse *fs, const char *leaf,
+                               int is_directory);
+static int ensure_parent_directory(const char *path);
 static int build_backing_path(const HideousFS_Fuse *fs, const char *path,
                               char *dest, size_t dest_size);
 static int resolve_directory_path(const HideousFS_Fuse *fs, const char *path,
@@ -76,6 +81,12 @@ static int read_synthetic_directory(const HideousFS_Fuse *fs,
                                     const char *extension, void *buf,
                                     HideousFS_FuseFillDir filler, off_t offset,
                                     enum fuse_readdir_flags flags);
+static int read_suffix_projected_directory(const HideousFS_Fuse *fs,
+                                           const char *backing_dir,
+                                           void *buf,
+                                           HideousFS_FuseFillDir filler,
+                                           off_t offset,
+                                           enum fuse_readdir_flags flags);
 static int parse_args(int argc, char **argv, HideousFS_Fuse *fs,
                       char ***fuse_argv_out, int *fuse_argc_out,
                       int *run_selftest);
@@ -254,6 +265,14 @@ static int split_extension(const HideousFS_Fuse *fs, const char *leaf,
                                             strlen(dot + 1));
 }
 
+static int split_mapped_extension(const HideousFS_Fuse *fs, const char *leaf,
+                                  const char **extension, size_t *base_len)
+{
+    int index = split_extension(fs, leaf, extension, base_len);
+
+    return index >= 0;
+}
+
 static int is_mapped_extension_component(const HideousFS_Fuse *fs,
                                          const char *component,
                                          size_t component_len)
@@ -262,13 +281,62 @@ static int is_mapped_extension_component(const HideousFS_Fuse *fs,
                                             component_len) >= 0;
 }
 
-static int is_hidden_real_name(const HideousFS_Fuse *fs, const char *leaf)
+static int is_hidden_real_name(const HideousFS_Fuse *fs, const char *leaf,
+                               int is_directory)
 {
-    if (fs->extension_mode != fuse_extension_directory) {
+    switch (fs->extension_mode) {
+    case fuse_extension_directory:
+        return is_directory && hideousfs_is_mapped_extension(&fs->mapping, leaf);
+
+    case fuse_extension_suffix:
+        if (is_directory) {
+            return hideousfs_is_mapped_extension(&fs->mapping, leaf);
+        }
+        return split_mapped_extension(fs, leaf, NULL, NULL);
+
+    case fuse_extension_pass:
         return 0;
     }
 
-    return hideousfs_is_mapped_extension(&fs->mapping, leaf);
+    return 0;
+}
+
+static int ensure_parent_directory(const char *path)
+{
+    char parent[PATH_MAX];
+    char *slash;
+    struct stat st;
+
+    if (!hideousfs_copy_string(parent, sizeof(parent), path)) {
+        return -ENAMETOOLONG;
+    }
+
+    slash = strrchr(parent, '/');
+    if (slash == NULL || slash == parent) {
+        return 0;
+    }
+
+    *slash = '\0';
+    if (lstat(parent, &st) == 0) {
+        return S_ISDIR(st.st_mode) ? 0 : -ENOTDIR;
+    }
+    if (errno != ENOENT) {
+        return -errno;
+    }
+
+    {
+        int error = ensure_parent_directory(parent);
+
+        if (error != 0) {
+            return error;
+        }
+    }
+
+    if (mkdir(parent, 0777) != 0 && errno != EEXIST) {
+        return -errno;
+    }
+
+    return 0;
 }
 
 static int build_backing_path(const HideousFS_Fuse *fs, const char *path,
@@ -291,6 +359,30 @@ static int build_backing_path(const HideousFS_Fuse *fs, const char *path,
     }
 
     leaf = last_path_component(path);
+
+    if (fs->extension_mode == fuse_extension_suffix) {
+        size_t base_len;
+
+        if (!split_mapped_extension(fs, leaf, &extension, &base_len)) {
+            return join_path(dest, dest_size, fs->backing_dir, relative);
+        }
+
+        prefix_end = leaf == relative ? leaf : leaf - 1;
+        prefix_len = (size_t)(prefix_end - relative);
+        extension_len = strlen(extension);
+
+        if (!hideousfs_copy_string(dest, dest_size, fs->backing_dir)) {
+            return 0;
+        }
+        if (!append_path_component(dest, dest_size, relative, prefix_len)) {
+            return 0;
+        }
+        if (!append_path_component(dest, dest_size, extension, extension_len)) {
+            return 0;
+        }
+        return append_path_component(dest, dest_size, leaf, base_len);
+    }
+
     extension = previous_path_component(path, leaf);
     if (extension == NULL) {
         return join_path(dest, dest_size, fs->backing_dir, relative);
@@ -339,6 +431,9 @@ static int resolve_directory_path(const HideousFS_Fuse *fs, const char *path,
 
     if (fs->extension_mode == fuse_extension_pass) {
         return join_path(dest, dest_size, fs->backing_dir, relative);
+    }
+    if (fs->extension_mode == fuse_extension_suffix) {
+        return build_backing_path(fs, path, dest, dest_size);
     }
 
     component = last_path_component(path);
@@ -428,6 +523,8 @@ static int read_projected_directory(const HideousFS_Fuse *fs,
         const char *extension;
         int extension_index;
         const char *projected_name = entry->d_name;
+        char path[PATH_MAX];
+        struct stat raw_st;
         HideousFS_FuseAttr attr;
         int synthetic = 0;
 
@@ -435,8 +532,16 @@ static int read_projected_directory(const HideousFS_Fuse *fs,
             continue;
         }
 
-        if (fs->extension_mode == fuse_extension_directory &&
-            is_hidden_real_name(fs, entry->d_name)) {
+        if (!join_path(path, sizeof(path), backing_dir, entry->d_name)) {
+            closedir(dir);
+            return -ENAMETOOLONG;
+        }
+        if (lstat(path, &raw_st) != 0) {
+            closedir(dir);
+            return -errno;
+        }
+
+        if (is_hidden_real_name(fs, entry->d_name, S_ISDIR(raw_st.st_mode))) {
             continue;
         }
 
@@ -459,18 +564,7 @@ static int read_projected_directory(const HideousFS_Fuse *fs,
         if (synthetic) {
             fill_synthetic_dir_attr(&attr);
         } else {
-            char path[PATH_MAX];
-            int error;
-
-            if (!join_path(path, sizeof(path), backing_dir, entry->d_name)) {
-                closedir(dir);
-                return -ENAMETOOLONG;
-            }
-            error = lstat_fuse_attr(path, &attr);
-            if (error != 0) {
-                closedir(dir);
-                return error;
-            }
+            stat_to_fuse_attr(&raw_st, &attr);
         }
 
         if (add_readdir_entry(buf, filler, projected_name, &attr, index) != 0) {
@@ -544,12 +638,136 @@ static int read_synthetic_directory(const HideousFS_Fuse *fs,
     return 0;
 }
 
+static int read_suffix_projected_directory(const HideousFS_Fuse *fs,
+                                           const char *backing_dir,
+                                           void *buf,
+                                           HideousFS_FuseFillDir filler,
+                                           off_t offset,
+                                           enum fuse_readdir_flags flags)
+{
+    DIR *dir;
+    struct dirent *entry;
+    off_t index = 0;
+
+    (void)flags;
+
+    dir = opendir(backing_dir);
+    if (dir == NULL) {
+        return -errno;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        char path[PATH_MAX];
+        struct stat raw_st;
+
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        if (!join_path(path, sizeof(path), backing_dir, entry->d_name)) {
+            closedir(dir);
+            return -ENAMETOOLONG;
+        }
+        if (lstat(path, &raw_st) != 0) {
+            closedir(dir);
+            return -errno;
+        }
+
+        if (S_ISDIR(raw_st.st_mode) &&
+            hideousfs_is_mapped_extension(&fs->mapping, entry->d_name)) {
+            DIR *bucket;
+            struct dirent *child;
+
+            bucket = opendir(path);
+            if (bucket == NULL) {
+                closedir(dir);
+                return -errno;
+            }
+
+            while ((child = readdir(bucket)) != NULL) {
+                char child_path[PATH_MAX];
+                char projected_name[PATH_MAX];
+                HideousFS_FuseAttr attr;
+                size_t child_len;
+                size_t extension_len;
+                int error;
+
+                if (strcmp(child->d_name, ".") == 0 ||
+                    strcmp(child->d_name, "..") == 0) {
+                    continue;
+                }
+
+                child_len = strlen(child->d_name);
+                extension_len = strlen(entry->d_name);
+                if (child_len + 1 + extension_len >= sizeof(projected_name)) {
+                    closedir(bucket);
+                    closedir(dir);
+                    return -ENAMETOOLONG;
+                }
+
+                memcpy(projected_name, child->d_name, child_len);
+                projected_name[child_len] = '.';
+                memcpy(projected_name + child_len + 1, entry->d_name,
+                       extension_len + 1);
+
+                if (index++ < offset) {
+                    continue;
+                }
+
+                if (!join_path(child_path, sizeof(child_path), path,
+                               child->d_name)) {
+                    closedir(bucket);
+                    closedir(dir);
+                    return -ENAMETOOLONG;
+                }
+                error = lstat_fuse_attr(child_path, &attr);
+                if (error != 0) {
+                    closedir(bucket);
+                    closedir(dir);
+                    return error;
+                }
+                if (add_readdir_entry(buf, filler, projected_name, &attr,
+                                      index) != 0) {
+                    closedir(bucket);
+                    closedir(dir);
+                    return -ENOMEM;
+                }
+            }
+
+            closedir(bucket);
+            continue;
+        }
+
+        if (is_hidden_real_name(fs, entry->d_name, S_ISDIR(raw_st.st_mode))) {
+            continue;
+        }
+
+        if (index++ < offset) {
+            continue;
+        }
+
+        {
+            HideousFS_FuseAttr attr;
+
+            stat_to_fuse_attr(&raw_st, &attr);
+            if (add_readdir_entry(buf, filler, entry->d_name, &attr,
+                                  index) != 0) {
+                closedir(dir);
+                return -ENOMEM;
+            }
+        }
+    }
+
+    closedir(dir);
+    return 0;
+}
+
 static int hideousfs_fuse_getattr(const char *path, HideousFS_FuseAttr *attr,
                                   struct fuse_file_info *fi)
 {
     HideousFS_Fuse *fs = (HideousFS_Fuse *)fuse_get_context()->private_data;
     char backing_path[PATH_MAX];
     char synthetic_extension[MaxExtensionLen];
+    struct stat raw_st;
     int found;
 
     (void)fi;
@@ -573,11 +791,19 @@ static int hideousfs_fuse_getattr(const char *path, HideousFS_FuseAttr *attr,
     if (!build_backing_path(fs, path, backing_path, sizeof(backing_path))) {
         return -ENAMETOOLONG;
     }
-    if (is_hidden_real_name(fs, last_path_component(path))) {
+
+    if (lstat(backing_path, &raw_st) != 0) {
+        return -errno;
+    }
+    if (!(fs->extension_mode == fuse_extension_suffix &&
+          split_mapped_extension(fs, last_path_component(path), NULL, NULL)) &&
+        is_hidden_real_name(fs, last_path_component(path),
+                            S_ISDIR(raw_st.st_mode))) {
         return -ENOENT;
     }
 
-    return lstat_fuse_attr(backing_path, attr);
+    stat_to_fuse_attr(&raw_st, attr);
+    return 0;
 }
 
 static int hideousfs_fuse_readdir(const char *path, void *buf,
@@ -616,8 +842,13 @@ static int hideousfs_fuse_readdir(const char *path, void *buf,
         error = read_synthetic_directory(fs, backing_path, synthetic_extension,
                                          buf, filler, offset, flags);
     } else {
-        error = read_projected_directory(fs, backing_path, buf, filler,
-                                         offset, flags);
+        if (fs->extension_mode == fuse_extension_suffix) {
+            error = read_suffix_projected_directory(fs, backing_path, buf,
+                                                    filler, offset, flags);
+        } else {
+            error = read_projected_directory(fs, backing_path, buf, filler,
+                                             offset, flags);
+        }
     }
 
     return error;
@@ -631,9 +862,6 @@ static int hideousfs_fuse_open(const char *path, struct fuse_file_info *fi)
 
     if (!build_backing_path(fs, path, backing_path, sizeof(backing_path))) {
         return -ENAMETOOLONG;
-    }
-    if (is_hidden_real_name(fs, last_path_component(path))) {
-        return -ENOENT;
     }
 
     fd = open(backing_path, fi->flags);
@@ -658,8 +886,12 @@ static int hideousfs_fuse_create(const char *path, mode_t mode,
     if (!build_backing_path(fs, path, backing_path, sizeof(backing_path))) {
         return -ENAMETOOLONG;
     }
-    if (is_hidden_real_name(fs, last_path_component(path))) {
-        return -ENOENT;
+    {
+        int error = ensure_parent_directory(backing_path);
+
+        if (error != 0) {
+            return error;
+        }
     }
 
     fd = open(backing_path, fi->flags | O_CREAT, mode);
@@ -747,7 +979,7 @@ static int hideousfs_fuse_mkdir(const char *path, mode_t mode)
     if (fs->readonly) {
         return -EROFS;
     }
-    if (is_hidden_real_name(fs, last_path_component(path))) {
+    if (is_hidden_real_name(fs, last_path_component(path), 1)) {
         return -EEXIST;
     }
     if (!build_backing_path(fs, path, backing_path, sizeof(backing_path))) {
@@ -792,6 +1024,13 @@ static int hideousfs_fuse_rename(const char *from, const char *to,
     if (!build_backing_path(fs, from, backing_from, sizeof(backing_from)) ||
         !build_backing_path(fs, to, backing_to, sizeof(backing_to))) {
         return -ENAMETOOLONG;
+    }
+    {
+        int error = ensure_parent_directory(backing_to);
+
+        if (error != 0) {
+            return error;
+        }
     }
     return rename(backing_from, backing_to) == 0 ? 0 : -errno;
 }
@@ -857,8 +1096,17 @@ static int parse_args(int argc, char **argv, HideousFS_Fuse *fs,
     for (i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--extension=directory") == 0) {
             fs->extension_mode = fuse_extension_directory;
+        } else if (strcmp(argv[i], "--extension=suffix") == 0) {
+            fs->extension_mode = fuse_extension_suffix;
         } else if (strcmp(argv[i], "--extension=pass") == 0) {
             fs->extension_mode = fuse_extension_pass;
+        } else if (strcmp(argv[i], "--filetypes=pass") == 0) {
+            /* pass is currently the only implemented filetype mode. */
+        } else if (strncmp(argv[i], "--filetypes=", 12) == 0) {
+            fprintf(stderr, "%s: only --filetypes=pass is implemented\n",
+                    argv[0]);
+            free(fuse_argv);
+            return -EINVAL;
         } else if (strcmp(argv[i], "--readonly") == 0) {
             fs->readonly = 1;
         } else if (strcmp(argv[i], "--foreground") == 0) {
@@ -897,7 +1145,7 @@ static int parse_args(int argc, char **argv, HideousFS_Fuse *fs,
     if (!backing_seen || !mount_seen) {
         fprintf(stderr, "usage: %s [options] <backing-directory> <mount-point>\n",
                 argv[0]);
-        fprintf(stderr, "options: --extension=directory|pass --reverse=a,b,c --readonly --foreground --debug\n");
+        fprintf(stderr, "options: --extension=directory|suffix|pass --filetypes=pass --reverse=a,b,c --readonly --foreground --debug\n");
         free(fuse_argv);
         return -EINVAL;
     }
@@ -939,6 +1187,17 @@ static int run_selftest(void)
     ok = expect_path(&fs, "/c/leaf", "/tmp/hideousfs-backing/leaf.c") && ok;
     ok = expect_path(&fs, "/src/h/header", "/tmp/hideousfs-backing/src/header.h") && ok;
     ok = expect_path(&fs, "/src/doc/Readme", "/tmp/hideousfs-backing/src/doc/Readme") && ok;
+
+    fs.extension_mode = fuse_extension_suffix;
+    ok = expect_path(&fs, "/", "/tmp/hideousfs-backing") && ok;
+    ok = expect_path(&fs, "/Readme", "/tmp/hideousfs-backing/Readme") && ok;
+    ok = expect_path(&fs, "/leaf.c", "/tmp/hideousfs-backing/c/leaf") && ok;
+    ok = expect_path(&fs, "/src/header.h", "/tmp/hideousfs-backing/src/h/header") && ok;
+    ok = expect_path(&fs, "/src/doc/Readme", "/tmp/hideousfs-backing/src/doc/Readme") && ok;
+
+    fs.extension_mode = fuse_extension_pass;
+    ok = expect_path(&fs, "/leaf.c", "/tmp/hideousfs-backing/leaf.c") && ok;
+    ok = expect_path(&fs, "/c/leaf", "/tmp/hideousfs-backing/c/leaf") && ok;
 
     if (!ok) {
         return 1;
