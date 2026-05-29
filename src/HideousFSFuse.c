@@ -37,6 +37,8 @@ typedef enum HideousFS_FuseFiletypeMode {
 
 typedef struct HideousFS_Fuse {
     char backing_dir[PATH_MAX];
+    dev_t backing_device;
+    int have_backing_device;
     HideousFS_FuseExtensionMode extension_mode;
     HideousFS_FuseFiletypeMode filetype_mode;
     HideousFS_Image mapping;
@@ -57,7 +59,6 @@ typedef fuse_fill_dir_t HideousFS_FuseFillDir;
 #endif
 
 static void stat_to_fuse_attr(const struct stat *st, HideousFS_FuseAttr *attr);
-static int lstat_fuse_attr(const char *path, HideousFS_FuseAttr *attr);
 static int host_getxattr(const char *path, const char *name, void *value,
                          size_t size);
 static int host_setxattr(const char *path, const char *name, const void *value,
@@ -115,6 +116,8 @@ static int is_hidden_presented_path(const HideousFS_Fuse *fs,
                                     const char *path);
 static void debug_hidden(const HideousFS_Fuse *fs, const char *name,
                          const char *reason);
+static int is_external_mount_dir(const HideousFS_Fuse *fs, const char *path,
+                                 const struct stat *st);
 static int ensure_parent_directory(const char *path);
 static int reject_symlink_backing_path(const char *path);
 static int find_comma_suffix_variant(const char *path, char *dest,
@@ -186,18 +189,6 @@ static void stat_to_fuse_attr(const struct stat *st, HideousFS_FuseAttr *attr)
 #else
     *attr = *st;
 #endif
-}
-
-static int lstat_fuse_attr(const char *path, HideousFS_FuseAttr *attr)
-{
-    struct stat st;
-
-    if (lstat(path, &st) != 0) {
-        return -errno;
-    }
-
-    stat_to_fuse_attr(&st, attr);
-    return 0;
 }
 
 static int host_getxattr(const char *path, const char *name, void *value,
@@ -945,6 +936,20 @@ static void debug_hidden(const HideousFS_Fuse *fs, const char *name,
     }
 }
 
+static int is_external_mount_dir(const HideousFS_Fuse *fs, const char *path,
+                                 const struct stat *st)
+{
+    if (!fs->have_backing_device || !S_ISDIR(st->st_mode)) {
+        return 0;
+    }
+    if (st->st_dev == fs->backing_device) {
+        return 0;
+    }
+
+    debug_hidden(fs, path, "mounted filesystem below backing directory");
+    return 1;
+}
+
 static int ensure_parent_directory(const char *path)
 {
     char parent[PATH_MAX];
@@ -1408,6 +1413,9 @@ static int read_projected_directory(const HideousFS_Fuse *fs,
             closedir(dir);
             return -errno;
         }
+        if (is_external_mount_dir(fs, path, &raw_st)) {
+            continue;
+        }
 
         if (!build_presented_leaf(fs, backing_dir, entry->d_name,
                                   presented_leaf, sizeof(presented_leaf))) {
@@ -1520,7 +1528,7 @@ static int read_synthetic_directory(const HideousFS_Fuse *fs,
         char projected_name[PATH_MAX];
         char path[PATH_MAX];
         HideousFS_FuseAttr attr;
-        int error;
+        struct stat raw_st;
 
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
             continue;
@@ -1582,11 +1590,14 @@ static int read_synthetic_directory(const HideousFS_Fuse *fs,
             closedir(dir);
             return -ENAMETOOLONG;
         }
-        error = lstat_fuse_attr(path, &attr);
-        if (error != 0) {
+        if (lstat(path, &raw_st) != 0) {
             closedir(dir);
-            return error;
+            return -errno;
         }
+        if (is_external_mount_dir(fs, path, &raw_st)) {
+            continue;
+        }
+        stat_to_fuse_attr(&raw_st, &attr);
 
         if (add_readdir_entry(buf, filler, projected_name, &attr, index) != 0) {
             closedir(dir);
@@ -1635,6 +1646,9 @@ static int read_suffix_projected_directory(const HideousFS_Fuse *fs,
             closedir(dir);
             return -errno;
         }
+        if (is_external_mount_dir(fs, path, &raw_st)) {
+            continue;
+        }
 
         if (S_ISDIR(raw_st.st_mode) &&
             hideousfs_is_mapped_extension(&fs->mapping, entry->d_name)) {
@@ -1652,11 +1666,11 @@ static int read_suffix_projected_directory(const HideousFS_Fuse *fs,
                 char presented_leaf[PATH_MAX];
                 char projected_name[PATH_MAX];
                 HideousFS_FuseAttr attr;
+                struct stat child_st;
                 size_t child_len;
                 size_t extension_len;
                 size_t logical_child_len;
                 const char *metadata_suffix = NULL;
-                int error;
 
                 if (strcmp(child->d_name, ".") == 0 ||
                     strcmp(child->d_name, "..") == 0) {
@@ -1664,6 +1678,20 @@ static int read_suffix_projected_directory(const HideousFS_Fuse *fs,
                 }
                 if (is_ignored_name(fs, child->d_name)) {
                     debug_hidden(fs, child->d_name, "ignored backing name");
+                    continue;
+                }
+                if (!join_path(child_path, sizeof(child_path), path,
+                               child->d_name)) {
+                    closedir(bucket);
+                    closedir(dir);
+                    return -ENAMETOOLONG;
+                }
+                if (lstat(child_path, &child_st) != 0) {
+                    closedir(bucket);
+                    closedir(dir);
+                    return -errno;
+                }
+                if (is_external_mount_dir(fs, child_path, &child_st)) {
                     continue;
                 }
 
@@ -1715,18 +1743,7 @@ static int read_suffix_projected_directory(const HideousFS_Fuse *fs,
                     continue;
                 }
 
-                if (!join_path(child_path, sizeof(child_path), path,
-                               child->d_name)) {
-                    closedir(bucket);
-                    closedir(dir);
-                    return -ENAMETOOLONG;
-                }
-                error = lstat_fuse_attr(child_path, &attr);
-                if (error != 0) {
-                    closedir(bucket);
-                    closedir(dir);
-                    return error;
-                }
+                stat_to_fuse_attr(&child_st, &attr);
                 if (add_readdir_entry(buf, filler, projected_name, &attr,
                                       index) != 0) {
                     closedir(bucket);
@@ -1802,6 +1819,9 @@ static int hideousfs_fuse_getattr(const char *path, HideousFS_FuseAttr *attr,
 
     if (lstat(backing_path, &raw_st) != 0) {
         return -errno;
+    }
+    if (is_external_mount_dir(fs, backing_path, &raw_st)) {
+        return -ENOENT;
     }
     if (!(fs->extension_mode == fuse_extension_suffix &&
           split_mapped_extension(fs, last_path_component(path), NULL, NULL)) &&
@@ -2475,10 +2495,18 @@ static int parse_args(int argc, char **argv, HideousFS_Fuse *fs,
         } else if (argv[i][0] == '-') {
             fuse_argv[fuse_argc++] = argv[i];
         } else if (!backing_seen) {
+            struct stat backing_st;
+
             if (realpath(argv[i], fs->backing_dir) == NULL) {
                 free(fuse_argv);
                 return -errno;
             }
+            if (lstat(fs->backing_dir, &backing_st) != 0) {
+                free(fuse_argv);
+                return -errno;
+            }
+            fs->backing_device = backing_st.st_dev;
+            fs->have_backing_device = 1;
             backing_seen = 1;
         } else if (!mount_seen) {
             int error = ignore_mountpoint_if_inside_backing(fs, argv[i]);

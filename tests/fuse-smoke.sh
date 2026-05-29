@@ -5,6 +5,12 @@ binary=${1:-build/hideousfs-fuse}
 tmp=
 mount_pid=
 mount_point=
+extra_mount_pid=
+extra_mount_point=
+
+device_id() {
+    stat -f %d "$1" 2>/dev/null || stat -c %d "$1"
+}
 
 fail() {
     echo "FAIL: $*" >&2
@@ -13,11 +19,13 @@ fail() {
 
 cleanup() {
     if [[ -n "${tmp}" ]]; then
-        if [[ -n "${mount_point}" ]] && mount | grep -q "on ${mount_point} "; then
-            umount "${mount_point}" >/dev/null 2>&1 || true
-        fi
+        [[ -n "${mount_point}" ]] && umount "${mount_point}" >/dev/null 2>&1 || true
+        [[ -n "${extra_mount_point}" ]] && umount "${extra_mount_point}" >/dev/null 2>&1 || true
         if [[ -n "${mount_pid}" ]]; then
             wait "${mount_pid}" >/dev/null 2>&1 || true
+        fi
+        if [[ -n "${extra_mount_pid}" ]]; then
+            wait "${extra_mount_pid}" >/dev/null 2>&1 || true
         fi
         rm -rf "${tmp}"
     fi
@@ -25,13 +33,15 @@ cleanup() {
 
 start_mount() {
     local mode=$1
+    local before
     shift
 
+    before=$(device_id "${mount_point}")
     "${binary}" "--extension=${mode}" "$@" --foreground "${tmp}/backing" "${mount_point}" &
     mount_pid=$!
 
     for _ in {1..50}; do
-        if mount | grep -q "on ${mount_point} "; then
+        if [[ "$(device_id "${mount_point}")" != "${before}" ]]; then
             return
         fi
         sleep 0.1
@@ -41,13 +51,37 @@ start_mount() {
 }
 
 stop_mount() {
-    if mount | grep -q "on ${mount_point} "; then
-        umount "${mount_point}"
-    fi
+    umount "${mount_point}" >/dev/null 2>&1 || true
     if [[ -n "${mount_pid}" ]]; then
         wait "${mount_pid}" >/dev/null 2>&1 || true
         mount_pid=
     fi
+}
+
+start_extra_mount() {
+    local before
+
+    before=$(device_id "${extra_mount_point}")
+    "${binary}" --extension=pass --foreground "${tmp}/backing" "${extra_mount_point}" &
+    extra_mount_pid=$!
+
+    for _ in {1..50}; do
+        if [[ "$(device_id "${extra_mount_point}")" != "${before}" ]]; then
+            return
+        fi
+        sleep 0.1
+    done
+
+    fail "extra mount did not become ready"
+}
+
+stop_extra_mount() {
+    umount "${extra_mount_point}" >/dev/null 2>&1 || true
+    if [[ -n "${extra_mount_pid}" ]]; then
+        wait "${extra_mount_pid}" >/dev/null 2>&1 || true
+        extra_mount_pid=
+    fi
+    extra_mount_point=
 }
 
 assert_file() {
@@ -78,6 +112,8 @@ reset_tree() {
     tmp=$(mktemp -d /private/tmp/hideousfs-fuse-test.XXXXXX)
     mkdir -p "${tmp}/backing" "${tmp}/mnt"
     mount_point="${tmp}/mnt"
+    extra_mount_pid=
+    extra_mount_point=
 }
 
 "${binary}" --selftest >/dev/null
@@ -191,6 +227,23 @@ start_mount suffix
 assert_file "${mount_point}/leaf.c" "c file"
 ! ls -A "${mount_point}" | grep -qx "mnt" || fail "mountpoint is visible inside backing view"
 stop_mount
+rm -rf "${tmp}"
+tmp=
+
+reset_tree
+mkdir -p "${tmp}/backing/c" "${tmp}/backing/cmhg" "${tmp}/backing/comma" "${tmp}/backing/mnt"
+printf 'c file\n' > "${tmp}/backing/c/leaf"
+printf 'cmhg file\n' > "${tmp}/backing/cmhg/module"
+extra_mount_point="${tmp}/backing/comma"
+mount_point="${tmp}/backing/mnt"
+
+start_extra_mount
+start_mount suffix --reverse=c,h,cmhg
+assert_file "${mount_point}/leaf.c" "c file"
+assert_file "${mount_point}/module.cmhg" "cmhg file"
+! ls -A "${mount_point}" | grep -qx "comma" || fail "nested mountpoint is visible inside backing view"
+stop_mount
+stop_extra_mount
 rm -rf "${tmp}"
 tmp=
 
