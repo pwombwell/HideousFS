@@ -94,9 +94,12 @@ build/hideousfs-fuse [options] <backing-directory> <mount-point>
 Useful options:
 
 ```text
+--config=FILE
 --extension=directory|suffix|pass
 --filetypes=pass|suffix|xattr
 --reverse=c,h,a,cpp,c++,o,s
+--ignore=NAME
+--virtualdir=c,h,o
 --foreground
 --readonly
 --debug
@@ -121,32 +124,21 @@ make fuse-test
 
 ```text
 # HideousFS
-# filetype &001 during development; leafname is arbitrary
-mode hideous
-reverse c   .c
-reverse h   .h
-reverse s   .s
-reverse o   .o
-reverse a   .a
-reverse cpp .cpp
-reverse c++ .c++
+extension directory
+filetypes pass
+reverse c h s o a cpp c++
 ignore View
 ignore .git
+virtualdir c h o
 ```
 
 For the reverse view:
 
 ```text
 # HideousFS
-# filetype &001 during development; leafname is arbitrary
-mode beautiful
-reverse c   .c
-reverse h   .h
-reverse s   .s
-reverse o   .o
-reverse a   .a
-reverse cpp .cpp
-reverse c++ .c++
+extension suffix
+filetypes pass
+reverse c h s o a cpp c++
 ignore View
 ignore .git
 ```

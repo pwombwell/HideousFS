@@ -134,6 +134,31 @@ rm -rf "${tmp}"
 tmp=
 
 reset_tree
+printf 'c file\n' > "${tmp}/backing/leaf.c"
+printf 'basic file\n' > "${tmp}/backing/Smoke,ffb"
+printf 'hidden\n' > "${tmp}/backing/Hidden"
+cat > "${tmp}/hideousfs.conf" <<EOF
+extension directory
+filetypes xattr
+reverse c h
+ignore Hidden
+virtualdir h
+EOF
+
+start_mount pass --config="${tmp}/hideousfs.conf"
+assert_file "${tmp}/mnt/c/leaf" "c file"
+assert_file "${tmp}/mnt/Smoke" "basic file"
+assert_xattr_hex "${tmp}/mnt/Smoke" "00fbffff0000000000000000"
+[[ ! -e "${tmp}/mnt/Hidden" ]] || fail "ignored file is visible"
+! ls -A "${tmp}/mnt" | grep -qx "Hidden" || fail "ignored file is listed"
+ls -A "${tmp}/mnt" | grep -qx "h" || fail "configured virtual dir is not listed"
+printf 'created via virtual dir\n' > "${tmp}/mnt/h/header"
+assert_file "${tmp}/backing/header.h" "created via virtual dir"
+stop_mount
+rm -rf "${tmp}"
+tmp=
+
+reset_tree
 mkdir -p "${tmp}/backing/c" "${tmp}/backing/h" "${tmp}/backing/src/h"
 printf 'c file\n' > "${tmp}/backing/c/leaf"
 printf 'h file\n' > "${tmp}/backing/src/h/header"
@@ -163,6 +188,18 @@ printf 'pass suffix file\n' > "${tmp}/backing/leaf.c"
 start_mount pass
 assert_file "${tmp}/mnt/c/leaf" "pass c file"
 assert_file "${tmp}/mnt/leaf.c" "pass suffix file"
+stop_mount
+rm -rf "${tmp}"
+tmp=
+
+reset_tree
+printf 'outside\n' > "${tmp}/outside"
+ln -s "${tmp}/outside" "${tmp}/backing/escape"
+
+start_mount pass
+if cat "${tmp}/mnt/escape" >/dev/null 2>&1; then
+    fail "backing symlink escaped the mount"
+fi
 stop_mount
 rm -rf "${tmp}"
 tmp=
