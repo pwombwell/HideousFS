@@ -1,9 +1,12 @@
 # HideousFS Specification
 
-Write a RISC OS image filing system module in C, not C++. Use DOSFS only as
-reference material for how an image filing system talks to FileSwitch and how
-image handlers are structured. Do not fork DOSFS wholesale unless a small
-useful piece is clearly reusable.
+HideousFS is a family of projection filesystems for translating between
+RISC OS-style source layouts and Unix-style source layouts. It should support
+both a RISC OS image filing system product and a Unix/macOS FUSE product, sharing
+as much path-mapping code and specification language as practical.
+
+This document describes the shared behaviour and terminology. Product-specific
+requirements live in `Spec-RISCOS.md` and `Spec-Fuse.md`.
 
 ## History
 
@@ -18,22 +21,47 @@ does not generally have extensions because it uses filetypes. The compiler
 knows how to munge the filenames. This conflicts with other OSes, where
 filenames are not split across directories.
 
+Git repositories for RISC OS are usually in the RISC OS style, even if cross-compiling (eg. https://github.com/gerph/riscos-wimp-templates) but some are in unix style (eg. https://github.com/pwombwell/PDrivers/tree/main/PDriverPDF). This causes problems with tools that are generally designed for one and not the other.
+
 ## Goal
 
-A file of the HideousFS image filetype inside a HostFS directory acts as the
-image file / portal. The filename `View` is only a convention used in
-examples; any leafname with the correct filetype should work. Opening that
-image through RISC OS should show a transformed view of the containing
-directory. The image file itself contains configuration, not the file data.
+HideousFS has two related products:
+
+- A RISC OS image filing system module. This presents a transformed RISC OS view
+  of a backing HostFS directory through an image/config file.
+- A Unix/macOS FUSE filesystem. This mounts a backing Unix directory and presents
+  a transformed Unix view.
+
+Both products use the same mapping concepts and should share the pure mapping
+code. They differ in path syntax, integration points, and platform metadata.
+
+The purpose is to let each system use its native tools naturally. A RISC OS C
+compiler presented with `#include "header.h"` conventionally looks for
+`h.header`; a Unix compiler presented with the same source looks for `header.h`.
+There have been RISC OS compilers hosted on Unix and Unix compilers hosted on
+RISC OS that understand these conventions, but HideousFS should make the common
+case simpler: on Unix, use Unix tools and Unix filenames; on RISC OS, use RISC OS
+tools and RISC OS filenames.
+
+For the RISC OS product, a file of the HideousFS image filetype inside a RISC OS
+directory acts as the image file / portal. The filename `View` is only a
+convention used in examples; any leafname with the correct filetype should work.
+Opening that image through RISC OS should show a transformed view of the
+containing directory. The image file itself contains configuration, not the file
+data.
+
+For the FUSE product, a normal mount command should mount a backing Unix
+directory at a chosen mount point and present the transformed view there. There
+is no image file or FileSwitch integration in the FUSE product.
 
 Until an official filetype is allocated, use filetype `&001` from the user area.
 This intentionally risks clashing with existing uses such as soundtracker files and
 should be treated as temporary.
 
-Example backing directory:
+Example backing directory (viewed from RISC OS):
 
 ```text
-HostFS:$.myproject
+HostFS::HostFS.$.myproject
   View     (filetype &001; name is arbitrary)
   leaf1/c
   leaf2/c
@@ -44,17 +72,18 @@ HostFS:$.myproject
 Opening:
 
 ```text
-HostFS:$.myproject.View
+HostFS::HostFS.$.myproject.View
 ```
 
 should show something like:
 
 ```text
-c.leaf1
-c.leaf2
-h.leaf4
+c
+h
 Readme
 ```
+
+where `c` is a directory that contains `leaf1` and `leaf2`, and `h` is a directory that contains `leaf4`.
 
 The point is to allow Unix/GitHub/editor-friendly names such as `leaf/c`, which
 would be `leaf.c` in the Unix view of the filesystem, while RISC OS sees
@@ -62,25 +91,26 @@ traditional RISC OS-ish names such as `c.leaf`.
 
 ## Implementation Language
 
-Use C.
+Use C for the shared mapping code and for both products initially.
 
 Avoid C++.
 
-Assume normal RISC OS module style.
+The shared mapping code should avoid RISC OS-specific and FUSE-specific APIs so
+that it can be reused by both products. Product glue should live in separate
+source files.
 
 ## Reference Material
 
-Use the DOSFS source and PRM documentation as references for:
+For the RISC OS product, use the DOSFS source and PRM documentation as references
+for FileSwitch and image filing system integration. See `Spec-RISCOS.md` for the
+RISC OS-specific details.
 
-- registering an image filing system
-- image handler entry points
-- how FileSwitch opens an image file and redirects operations into the image FS
-- catalogue enumeration
-- file open/read/write calls
-- path translation behaviour
+For the FUSE product, use libfuse on Linux and macFUSE on macOS as references for
+filesystem operation entry points. See `Spec-Fuse.md` for the FUSE-specific
+details.
 
-HideousFS is not a FAT/DOS parser. It is a view/proxy filesystem backed by the
-parent directory of the image file.
+HideousFS is not a FAT/DOS parser and is not a physical filesystem. It is a
+view/proxy filesystem backed by an ordinary directory.
 
 ## Core Concept
 
@@ -88,13 +118,13 @@ The image file, conventionally named `View` but selected by filetype `&001`
 during development:
 
 ```text
-HostFS:$.myproject.View
+HostFS::HostFS.$.myproject.View
 ```
 
 backs onto its containing directory:
 
 ```text
-HostFS:$.myproject
+HostFS::HostFS.$.myproject
 ```
 
 The image/config file itself is excluded from the synthetic catalogue by
@@ -103,13 +133,21 @@ default, regardless of its leafname.
 The real files remain in the backing directory. HideousFS maps apparent RISC OS
 paths to backing HostFS paths.
 
-## Operating Modes
+For the FUSE product, there is no image/config file in the mounted view unless a
+normal file with that name exists in the backing directory. The backing directory
+is supplied explicitly as a mount option or command-line argument, and the mount
+point exposes the projected view.
 
-HideousFS should support two mapping modes, selected by the image config file.
+## Extension Mapping
 
-### Hideous Mode
+HideousFS should support configurable extension mapping. Extension mapping controls
+where source-style extensions live: as directory components, or attached to the
+leaf name. It is separate from RISC OS filetype representation.
 
-Hideous mode is the main mode for Unix/GitHub-friendly storage.
+### `extension directory`
+
+`extension directory` presents recognised extensions as directory components.
+This is the main mapping for Unix/GitHub-friendly backing storage.
 
 Backing directory contains Unix-style names as seen by RISC OS HostFS, for
 example:
@@ -131,15 +169,16 @@ Readme
 This is useful when the same files are also viewed from Unix, where HostFS
 presents `leaf/c` as `leaf.c`.
 
-### Beautiful Mode
+### `extension suffix`
 
-Beautiful mode is the reverse mode.
+`extension suffix` is the reverse mapping: recognised extension directories are
+presented as extensions attached to the leaf name.
 
-Backing directory contains RISC OS-style names:
+Backing directory contains RISC OS-style names, where `c` contains `leaf` and `h` contains `leaf`:
 
 ```text
-c.leaf
-h.leaf
+c
+h
 Readme
 ```
 
@@ -152,32 +191,38 @@ Readme
 ```
 
 This does not make the backing directory more useful from Unix, but it is useful
-for conversion and migration. Copying files out of a Beautiful-mode image view
+for conversion and migration. Copying files out of an `extension suffix` image view
 can produce the Unix-friendly layout. It also lets users try the mapping in
 reverse without immediately changing the original directory structure.
 
-V1 may hard-code Hideous mode. Beautiful mode should be kept in mind when
-designing the path-mapping functions so that the transform is explicitly
+V1 may hard-code `extension directory`. `extension suffix` should be kept in mind
+when designing the path-mapping functions so that the transform is explicitly
 reversible.
 
-## Initial Name Mapping
+## Initial Extension Mapping
 
-Configured extension mappings should describe a reversible pair. In Hideous
-mode, Unix-style HostFS names are shown as RISC OS-style source names. In
-Beautiful mode, the same mapping is used in reverse.
+Configured extension mappings should describe a reversible pair. With
+`extension directory`, extension suffixes in the backing store are shown as
+extension directories in the projected view. With `extension suffix`, the same
+mapping is used in reverse.
+
+The RISC OS product transforms RISC OS-style names using `.` as the directory
+separator and `/` as the extension separator. The FUSE product transforms
+Unix-style names using `/` as the directory separator and `.` as the extension
+separator.
 
 Examples:
 
-| Host name | HideousFS name |
-| --- | --- |
-| `leaf/c` | `c.leaf` |
-| `leaf/h` | `h.leaf` |
-| `leaf/s` | `s.leaf` |
-| `leaf/o` | `o.leaf` |
-| `leaf/a` | `a.leaf` |
-| `leaf/cpp` | `cpp.leaf` |
-| `leaf/c++` | `c++.leaf` |
-| `Readme/md` | `Readme/md` |
+| RISC OS suffix form | RISC OS directory form | Unix suffix form | Unix directory form |
+| --- | --- | --- | --- |
+| `leaf/c` | `c.leaf` | `leaf.c` | `c/leaf` |
+| `leaf/h` | `h.leaf` | `leaf.h` | `h/leaf` |
+| `leaf/s` | `s.leaf` | `leaf.s` | `s/leaf` |
+| `leaf/o` | `o.leaf` | `leaf.o` | `o/leaf` |
+| `leaf/a` | `a.leaf` | `leaf.a` | `a/leaf` |
+| `leaf/cpp` | `cpp.leaf` | `leaf.cpp` | `cpp/leaf` |
+| `leaf/c++` | `c++.leaf` | `leaf.c++` | `c++/leaf` |
+| `Readme/md` | `Readme/md` | `Readme.md` | `Readme.md` |
 
 The mapping must be reversible.
 
@@ -190,9 +235,12 @@ entries unless hidden by configuration. This allows, for example, two separate
 views of the same directory with different mappings. A later config option such
 as `ignoretype 001 fff` could hide entries by filetype, but v1 does not need it.
 
-A simple default mapping table is acceptable initially:
+ 
+A simple default mapping table is acceptable initially. In the RISC OS product,
+`extension directory` maps from the left column to the right column during
+catalogue enumeration, and maps back during file operations:
 
-| Host name | HideousFS name |
+| RISC OS suffix form | RISC OS directory form |
 | --- | --- |
 | `leaf/c` | `c.leaf` |
 | `leaf/h` | `h.leaf` |
@@ -203,15 +251,15 @@ A simple default mapping table is acceptable initially:
 | `leaf/c++` | `c++.leaf` |
 
 The image file, conventionally named `View` but with an arbitrary leafname,
-should later be parsed as config, including the mode. Multiple `reverse`,
+should later be parsed as config, including the extension mapping. Multiple `reverse`,
 `ignore` and `virtualdir` entries should be concatenated to the internal list.
 
-Example Hideous-mode config:
+Example `extension directory` config:
 
 ```text
 # HideousFS
 # filetype &001 during development; leafname is arbitrary
-mode hideous
+extension directory
 
 # Map all of c, h, a, cpp, c++, o, and s.
 reverse c h a cpp c++
@@ -230,7 +278,7 @@ For reverse conversion, the config may instead say:
 ```text
 # HideousFS
 # filetype &001 during development; leafname is arbitrary
-mode beautiful
+extension suffix
 
 reverse c h a cpp c++ o s
 ```
@@ -242,7 +290,6 @@ V1 can hard-code the default table before config parsing exists.
 ### 1. Minimal Image FS Skeleton
 
 - Build a C module.
-- Register HideousFS as image filing system number `666` for development.
 - Register/recognise the development image filetype `&001`.
 - Do not rely on the leafname `View`, except as a convenient convention in
   examples.
@@ -262,11 +309,12 @@ V1 can hard-code the default table before config parsing exists.
 
 ### 3. Add Name Transformation
 
-- In Hideous mode, apply `leaf/c -> c.leaf`, etc. during catalogue enumeration.
-- In Hideous mode, when opening `c.leaf`, map back to `leaf/c`.
-- Keep the mapping code symmetric so Beautiful mode can apply `c.leaf -> leaf/c`
-  during catalogue enumeration and map `leaf/c` back to `c.leaf` for file
-  operations.
+- With `extension directory`, apply `leaf/c -> c.leaf`, etc. during catalogue
+  enumeration.
+- With `extension directory`, when opening `c.leaf`, map back to `leaf/c`.
+- Keep the mapping code symmetric so `extension suffix` can apply
+  `c.leaf -> leaf/c` during catalogue enumeration and map `leaf/c` back to
+  `c.leaf` for file operations.
 - Unknown names pass through unchanged.
 - Keep collision handling simple initially: either reject ambiguous names or
   log/report an error.
@@ -346,10 +394,10 @@ Both could appear as `c.leaf`.
 
 For v1, use a simple policy:
 
-- Hideous mode hides real backing directories whose names are in the `reverse`
-  list. For example, a real backing directory named `c` disappears from view,
-  leaving only the synthetic `c` bucket.
-- Beautiful mode hides real backing files whose extension names are in the
+- `extension directory` hides real backing directories whose names are in the
+  `reverse` list. For example, a real backing directory named `c` disappears
+  from view, leaving only the synthetic `c` bucket.
+- `extension suffix` hides real backing files whose extension names are in the
   `reverse` list. For example, a real backing file named `leaf/c` disappears
   from view, leaving only the projected `c.leaf` entry.
 
@@ -366,8 +414,9 @@ HideousFS is a projection filesystem:
   directory with different settings.
 - File operations are proxied to real files through FileSwitch.
 - The same mapping table should work in both directions, with the
-  config-selected mode deciding which direction is used for catalogue
-  presentation and which direction is used for backing-store operations.
+  config-selected extension mapping deciding which direction is used for
+  catalogue presentation and which direction is used for backing-store
+  operations.
 
 Read-only first. Add writes after catalogue/open/read are reliable.
 
@@ -405,31 +454,14 @@ under macOS using the named tools, such as `PDModules/PDriverPDF`, compiled with
 
 ## Testing
 
-A RISC OS `BASIC` program should exist to create at least two directory
-structures representing both modes:
+Both products need deterministic tests for extension mapping, filetype
+representation, collisions, reads, writes, renames and deletes.
 
-- a Hideous-mode backing directory containing names such as `leaf/c`
-- a Beautiful-mode backing directory containing names such as `c.leaf`
-
-The test program should create an image config file in each directory, set the
-development filetype `&001`, and catalogue the directory through the image view.
-
-Output should be a small deterministic tree, similar to the Unix `tree`
-command, so it can be diffed against expected output. The tree output helper
-could live in a `LIBRARY`.
-
-A second `BASIC` program, or perhaps a `LIBRARY` included by the first, should
-exist to modify such a directory structure to ensure file renaming matches
-expectations. This should include renaming and deleting both files and
-directories.
-
-A third test should save files to ensure the correct backing file is modified. A
-simple sequence number could be written, and then checked outside the image FS
-to ensure the correct file was modified.
+Product-specific test plans live in `Spec-RISCOS.md` and `Spec-Fuse.md`.
 
 ## Repository Documents
 
 Keep this file as the developer/implementation specification. Add a separate
 `README.md` for user-facing documentation: what HideousFS does, how to create a
-config image file, how Hideous and Beautiful modes behave, and the current
+config image file, how the extension mappings behave, and the current
 temporary nature of filetype `&001`.

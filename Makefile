@@ -19,7 +19,7 @@ CMHG_ASM := $(CMHG_DIR)/cmhg.s
 CMHG_OBJ := $(OBJ_DIR)/cmhg.o
 CMHG_DEP := $(CMHG_DIR)/cmunge.d
 
-SRCS := src/HideousFS.c
+SRCS := src/HideousFS.c src/HideousFSFSEntry.c src/HideousFSMap.c
 OBJS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 DEPS := $(OBJS:.o=.d) $(CMHG_OBJ:.o=.d) $(CMHG_DEP)
 
