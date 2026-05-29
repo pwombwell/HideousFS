@@ -7,6 +7,8 @@ CC = $(TOOLCHAIN_BIN)/ncc-riscos
 AS = $(TOOLCHAIN_BIN)/asasm
 CMUNGE = $(TOOLCHAIN_BIN)/cmunge
 DRLINK = $(TOOLCHAIN_BIN)/drlink
+HOST_CC ?= cc
+PKG_CONFIG ?= pkg-config
 
 BUILD_DIR ?= build/
 CMHG_DIR := $(BUILD_DIR)/generated
@@ -24,6 +26,7 @@ OBJS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 DEPS := $(OBJS:.o=.d) $(CMHG_OBJ:.o=.d) $(CMHG_DEP)
 
 MODULE := $(MODULE_DIR)/HideousFS
+FUSE_BIN := $(BUILD_DIR)/hideousfs-fuse
 
 INCLUDES := -I$(CMHG_DIR)
 CFLAGS ?= -zM $(INCLUDES)
@@ -31,19 +34,28 @@ ASFLAGS ?= -aof
 CMUNGEFLAGS ?= -32bit -tnorcroft
 DRLINKFLAGS ?= -m
 LDLIBS ?= $(TOOLCHAIN_LIB)/stubs.a
+FUSE_CFLAGS := -Wall -Wextra -std=c99 -Isrc $(shell $(PKG_CONFIG) --cflags fuse3)
+FUSE_LDLIBS := $(shell $(PKG_CONFIG) --libs fuse3)
 
 .DEFAULT_GOAL := all
 
-.PHONY: all clean check-tools
+.PHONY: all clean check-tools fuse check-fuse-tools
 
 all: check-tools $(MODULE)
 	@echo "Built module: $(MODULE)"
+
+fuse: check-fuse-tools $(FUSE_BIN)
+	@echo "Built FUSE binary: $(FUSE_BIN)"
 
 check-tools:
 	@command -v "$(CC)" >/dev/null 2>&1 || { echo "error: compiler '$(CC)' not found"; exit 1; }
 	@command -v "$(AS)" >/dev/null 2>&1 || { echo "error: assembler '$(AS)' not found"; exit 1; }
 	@command -v "$(CMUNGE)" >/dev/null 2>&1 || { echo "error: cmunge '$(CMUNGE)' not found"; exit 1; }
 	@command -v "$(DRLINK)" >/dev/null 2>&1 || { echo "error: linker '$(DRLINK)' not found"; exit 1; }
+
+check-fuse-tools:
+	@command -v "$(PKG_CONFIG)" >/dev/null 2>&1 || { echo "error: pkg-config not found"; exit 1; }
+	@$(PKG_CONFIG) --exists fuse3 || { echo "error: fuse3 pkg-config package not found"; exit 1; }
 
 $(CMHG_HDR) $(CMHG_ASM): $(CMHG_SPEC)
 	@mkdir -p "$(CMHG_DIR)"
@@ -61,6 +73,10 @@ $(OBJ_DIR)/%.o: src/%.c $(CMHG_HDR)
 $(MODULE): $(CMHG_OBJ) $(OBJS)
 	@mkdir -p "$(@D)"
 	$(DRLINK) $(DRLINKFLAGS) -o "$@" $(CMHG_OBJ) $(OBJS) $(LDLIBS)
+
+$(FUSE_BIN): src/HideousFSFuse.c src/HideousFSMap.c src/HideousFS.h
+	@mkdir -p "$(@D)"
+	$(HOST_CC) $(FUSE_CFLAGS) -o "$@" src/HideousFSFuse.c src/HideousFSMap.c $(FUSE_LDLIBS)
 
 clean:
 	rm -rf "$(BUILD_DIR)"
